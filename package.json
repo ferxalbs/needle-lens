@@ -1,29 +1,42 @@
 {
-  "name": "wxt-react-starter",
-  "description": "manifest.json description",
+  "name": "needle-lens",
+  "description": "Turn the X posts already visible in front of you into a finished session.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
-    "build:firefox": "wxt build -b firefox",
-    "zip": "wxt zip",
-    "zip:firefox": "wxt zip -b firefox",
+    "build": "wxt build -b chrome",
+    "zip": "wxt zip -b chrome",
     "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:chrome": "playwright test tests/e2e/sidepanel.spec.ts",
+    "test:e2e:live": "playwright test tests/e2e/live-provider.spec.ts",
+    "lint": "node scripts/check-source.mjs",
+    "verify": "bun run lint && bun run compile && bun run test && bun run build && bun run check:manifest && bun run check:performance",
+    "check:manifest": "node scripts/check-manifest.mjs",
+    "check:performance": "node scripts/check-performance.mjs",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "@base-ui/react": "^1.8.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "valibot": "^1.5.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@wxt-dev/module-react": "^1.1.5",
-    "typescript": "^5.9.3",
-    "web-ext": "^10.5.0",
-    "wxt": "^0.21.3"
+    "@playwright/test": "^1.63.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/node": "^26.6.2",
+    "@wxt-dev/module-react": "^1.2.2",
+    "happy-dom": "^20.14.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
+    "web-ext": "^10.6.0",
+    "wxt": "^0.21.4"
   }
 }

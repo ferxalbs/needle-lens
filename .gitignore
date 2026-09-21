@@ -9,10 +9,15 @@ lerna-debug.log*
 
 node_modules
 .output
+test-results
 stats.html
 stats-*.json
 .wxt
 web-ext.config.ts
+
+# Local-only product decisions, provider research, and build notes. Never publish.
+.local-docs/
+output
 
 # Editor directories and files
 .vscode/*
