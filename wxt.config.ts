@@ -19,6 +19,10 @@ export default defineConfig({
     side_panel: {
       default_path: 'sidepanel.html',
     },
+    options_ui: {
+      page: 'settings.html',
+      open_in_tab: true,
+    },
     content_security_policy: {
       extension_pages: "script-src 'self'; object-src 'self';",
     },

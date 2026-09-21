@@ -12,8 +12,11 @@ The production manifest is intentionally narrow:
 
 - `activeTab` remains required for the user-initiated extraction. The side panel explicitly requests the two exact optional X origins only after the user presses **Grant access to X**; it checks that access before reading the active tab URL. Needle Lens fails closed unless the active tab is an HTTPS `x.com` or `www.x.com` page.
 - `scripting` is used by the service worker to run the bundled unlisted `visible.js` extractor in that active tab after the user presses **Preview visible posts**. No registered content script runs on page load.
-- `storage` provides `chrome.storage.session`. The API key, decision signals, receipt, and cache are memory-only extension state. The service worker calls `setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })`, so content scripts cannot read the storage area.
+- `storage` provides `chrome.storage.session` for the default session-only credential, decision signals, receipts, and cache. User-authored Lens/settings records live in extension-local storage; the optional seven-day credential mode stores only its AES-GCM envelope and non-extractable `CryptoKey` there after explicit opt-in. The service worker calls `setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })`, so content scripts cannot read the session storage area.
 - `sidePanel` supplies the user-controlled workflow where the browser exposes that API. The service worker capability-checks it; on Opera GX builds without `sidePanel`, it assigns the same `sidepanel.html` page to the toolbar action popup. That page is the only UI that can request extraction, provider evaluation, or outcome recording.
+- `options_ui` exposes `settings.html` as a dedicated tab for Lens CRUD/import/export, BYOK credential retention, cache/consent controls, X access, and the legal links. It does not receive post text or the raw credential.
 - `https://api.typesafe.ai/*` is the sole required host permission. It is needed for the service worker's direct HTTPS request to the verified TypeSafe AI endpoint. X access is optional and limited to the two exact X origins above; no proxy, analytics host, or wildcard origin is requested.
 
 Needle Lens does not request `tabs`, `webRequest`, cookies, history, identity, downloads, `unlimitedStorage`, or `<all_urls>`. It does not use X APIs or automate navigation or write actions.
+
+The rendered-content adapter is experimental and is not represented as approved or compliant with X. Users are responsible for reviewing X's current terms and obtaining any permission those terms require.

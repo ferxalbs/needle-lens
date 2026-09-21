@@ -1,17 +1,16 @@
 import type {
   AnalysisStats,
-  Mode,
+  LensConfig,
   Outcome,
   ProviderEvaluation,
   SessionReceipt,
 } from './types';
-import { PROVIDER } from './types';
+import { MODEL, PROVIDER } from './types';
 
 export const MAX_RECEIPT_HISTORY = 50;
 
 export function createReceipt(input: {
-  goal: string;
-  mode: Mode;
+  lens: LensConfig;
   stats: AnalysisStats;
   providerEvaluation: ProviderEvaluation | undefined;
   totalLatencyMs: number;
@@ -20,10 +19,13 @@ export function createReceipt(input: {
   return {
     version: 1,
     phase: 'awaiting_outcome',
-    goal: input.goal,
-    mode: input.mode,
+    lensId: input.lens.id,
+    lensName: input.lens.name,
+    strictness: input.lens.strictness,
+    goal: input.lens.goal,
+    mode: input.lens.mode,
     provider: PROVIDER,
-    model: input.providerEvaluation?.model ?? 'cached-session-results',
+    model: input.providerEvaluation?.model ?? MODEL,
     stats: input.stats,
     providerLatencyMs: input.providerEvaluation?.latencyMs ?? 0,
     totalLatencyMs: input.totalLatencyMs,
@@ -34,9 +36,7 @@ export function createReceipt(input: {
 }
 
 export function completeReceipt(receipt: SessionReceipt, outcome: Outcome): SessionReceipt {
-  if (receipt.phase === 'complete') {
-    throw new Error('The session receipt is already complete.');
-  }
+  if (receipt.phase === 'complete') throw new Error('The session receipt is already complete.');
   return {
     ...receipt,
     phase: 'complete',
@@ -55,21 +55,22 @@ export function appendReceiptHistory(
 export function formatReceipt(receipt: SessionReceipt): string {
   const lines = [
     'NEEDLE LENS — SESSION RECEIPT',
-    `Goal: ${receipt.goal}`,
-    `Mode: ${receipt.mode}`,
+    'Session complete',
+    `Lens: ${receipt.lensName}`,
     `Reviewed: ${receipt.stats.reviewed}`,
-    `Cache hits: ${receipt.stats.cacheHits}`,
-    `Evaluated by provider: ${receipt.stats.providerEvaluated}`,
-    `Worth acting on: ${receipt.stats.worthActingOn}`,
+    `Act: ${receipt.stats.act}`,
+    `Inspect: ${receipt.stats.inspect}`,
+    `Passed: ${receipt.stats.passed}`,
+    `Uncertain: ${receipt.stats.uncertain}`,
     `Shown: ${receipt.stats.shown}`,
-    `Outcome: ${receipt.outcome ?? 'AWAITING OUTCOME'}`,
-    `Provider/model: ${receipt.provider} / ${receipt.model}`,
-    `Provider latency: ${receipt.providerLatencyMs} ms`,
+    `Jev model: ${receipt.model}`,
+    `Jev time: ${receipt.providerLatencyMs} ms`,
+    `Cost: ${receipt.costStatus === 'unavailable' ? 'unavailable' : receipt.costUsd === undefined ? receipt.costStatus : `$${receipt.costUsd.toFixed(6)}`}`,
+    `Outcome: ${receipt.outcome ?? 'awaiting user'}`,
+    `Strictness: ${receipt.strictness}`,
     `Total session latency: ${receipt.totalLatencyMs} ms`,
     `Input usage: ${receipt.inputTokens ?? 'not reported'}`,
     `Output usage: ${receipt.outputTokens ?? 'not reported'}`,
-    `Cost status: ${receipt.costStatus}`,
-    ...(receipt.costUsd === undefined ? [] : [`Cost: $${receipt.costUsd.toFixed(6)}`]),
     ...(receipt.completedAt ? [`Completed: ${receipt.completedAt}`] : []),
   ];
   return lines.join('\n');

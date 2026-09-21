@@ -20,6 +20,7 @@ for (const forbidden of ['<all_urls>', 'tabs', 'webRequest', 'unlimitedStorage',
   }
 }
 if (manifest.side_panel?.default_path !== 'sidepanel.html') throw new Error('Side panel path is missing.');
+if (manifest.options_ui?.page !== 'settings.html' || manifest.options_ui?.open_in_tab !== true) throw new Error('Settings page is missing or not configured as a tab.');
 const csp = manifest.content_security_policy?.extension_pages ?? '';
 if (!csp.includes("script-src 'self'") || csp.includes('unsafe-eval') || csp.includes('unsafe-inline')) {
   throw new Error(`Unexpected extension CSP: ${csp}`);

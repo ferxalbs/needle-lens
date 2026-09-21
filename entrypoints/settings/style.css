@@ -1,0 +1,13 @@
+@import "../sidepanel/style.css";
+
+@source "./App.tsx";
+
+body {
+  overflow: auto;
+}
+
+#root {
+  min-height: 100vh;
+  height: auto;
+  overflow: visible;
+}

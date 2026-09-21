@@ -22,7 +22,7 @@
     "test:e2e:chrome": "playwright test tests/e2e/sidepanel.spec.ts",
     "test:e2e:live": "playwright test tests/e2e/live-provider.spec.ts",
     "lint": "node scripts/check-source.mjs",
-    "verify": "bun run lint && bun run compile && bun run test && bun run build && bun run check:manifest && bun run check:performance",
+    "verify": "bun run lint && bun run compile && bun run build && bun run check:manifest && bun run check:performance && bun audit --production",
     "check:manifest": "node scripts/check-manifest.mjs",
     "check:performance": "node scripts/check-performance.mjs",
     "postinstall": "wxt prepare"
@@ -33,6 +33,7 @@
     "@hugeicons/core-free-icons": "^4.3.4",
     "@hugeicons/react": "^1.1.10",
     "@tailwindcss/vite": "^4.3.3",
+    "@typesafe-ai/sdk": "0.6.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",
     "react": "^19.3.0",

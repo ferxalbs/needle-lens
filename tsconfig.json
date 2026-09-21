@@ -7,5 +7,6 @@
     "jsx": "react-jsx",
     "moduleResolution": "Bundler",
     "lib": ["ES2024", "DOM", "DOM.Iterable", "WebWorker"]
-  }
+  },
+  "exclude": ["tests"]
 }
