@@ -18,6 +18,7 @@ import {
 } from '../../src/messaging/protocol';
 import {
   MODE_LABELS,
+  MIN_ITEMS,
   OUTCOME_LABELS,
   type DecisionLabel,
   type Mode,
@@ -50,20 +51,24 @@ import { Separator } from './components/ui/separator';
 import { Spinner } from './components/ui/spinner';
 import { Textarea } from './components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group';
+import { X_HOST_ORIGINS } from '../../src/security/x-access';
 
 type UiState =
-  | 'loading'
+  | 'checking_access'
+  | 'needs_x_access'
+  | 'checking_page'
+  | 'unsupported_page'
+  | 'retryable_error'
   | 'needs_key'
   | 'ready'
   | 'extracting'
   | 'insufficient_candidates'
   | 'awaiting_consent'
-  | 'evaluating'
+  | 'analyzing'
   | 'results'
   | 'no_useful_action'
   | 'awaiting_outcome'
-  | 'complete'
-  | 'error';
+  | 'completed';
 type SuccessfulResponse = Extract<ExtensionResponse, { ok: true }>;
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 
@@ -96,12 +101,13 @@ function decisionVariant(label: DecisionLabel): BadgeVariant {
 }
 
 function stateLabel(state: UiState): string {
-  if (state === 'loading') return 'Warming up…';
+  if (state === 'checking_access') return 'Checking X access…';
+  if (state === 'checking_page') return 'Checking current tab…';
   return state.replaceAll('_', ' ');
 }
 
 export default function App() {
-  const [uiState, setUiState] = useState<UiState>('loading');
+  const [uiState, setUiState] = useState<UiState>('checking_access');
   const [apiKey, setApiKey] = useState('');
   const [fingerprint, setFingerprint] = useState<string>();
   const [goal, setGoal] = useState(DEFAULT_GOAL);
@@ -113,6 +119,12 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copyLabel, setCopyLabel] = useState('Copy receipt');
+  const [accessReady, setAccessReady] = useState(false);
+  const keyAvailable = useRef(false);
+  const permissionInFlight = useRef(false);
+  const extractionInFlight = useRef(false);
+  const analysisInFlight = useRef(false);
+  const refreshRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const send = async (message: ExtensionMessage): Promise<ExtensionResponse> => {
     try {
@@ -123,32 +135,109 @@ export default function App() {
   };
 
   const applyState = (value: BackgroundState): void => {
+    keyAvailable.current = Boolean(value.keyFingerprint);
     setFingerprint(value.keyFingerprint);
     setReceipt(value.receipt);
     setReceiptHistory(value.receiptHistory ?? []);
-    if (value.state === 'needs_key') setUiState('needs_key');
-    else if (value.state === 'awaiting_outcome') setUiState('awaiting_outcome');
-    else if (value.state === 'complete') setUiState('complete');
-    else setUiState('ready');
+    if (value.state === 'awaiting_outcome') setUiState('awaiting_outcome');
+    else if (value.state === 'complete') setUiState('completed');
+  };
+
+  const clearRecoverableError = (): void => {
+    setError('');
+    setNotice('');
+  };
+
+  const messageForCode = (code: string | undefined): string => {
+    if (code === 'permission_required') return 'Needle Lens needs permission to read the posts visible on x.com.';
+    if (code === 'permission_check_failed') return 'Needle Lens could not verify permission. Try again.';
+    if (code === 'permission_denied') return 'Access was not granted. Needle Lens cannot inspect posts until you allow access to x.com.';
+    if (code === 'unsupported_page') return 'Open an x.com tab, then check the current tab again.';
+    if (code === 'tab_url_unavailable' || code === 'active_tab_unavailable') return 'Needle Lens could not verify the current tab. Check the extension permission and try again.';
+    if (code === 'injection_failed') return 'Needle Lens could not read visible posts on this page. Reload X and retry.';
+    if (code === 'active_tab_changed') return 'The active tab changed. Check the current tab and preview the visible posts again.';
+    return 'Needle Lens could not complete this step. Try again.';
+  };
+
+  const applyPreview = (value: AnalysisPreview): void => {
+    setPreview(value);
+    setResult(undefined);
+    if (value.candidateCount < MIN_ITEMS) {
+      setError(`Only ${value.candidateCount} eligible posts are visible. Scroll X until at least ${MIN_ITEMS} are in view, then preview again.`);
+      setUiState('insufficient_candidates');
+    } else if (keyAvailable.current) {
+      setUiState('awaiting_consent');
+    } else {
+      setUiState('needs_key');
+    }
+  };
+
+  const checkAndExtract = async (): Promise<void> => {
+    if (extractionInFlight.current) return;
+    extractionInFlight.current = true;
+    clearRecoverableError();
+    setPreview(undefined);
+    setResult(undefined);
+    setUiState('checking_page');
+    try {
+      const page = await send({ type: 'check_page' });
+      if (!isSuccessful(page, 'page_checked')) {
+        setAccessReady(false);
+        const code = responseCode(page);
+        setError(messageForCode(code));
+        setUiState(code === 'permission_required' || code === 'permission_denied'
+          ? 'needs_x_access'
+          : code === 'unsupported_page' ? 'unsupported_page' : 'retryable_error');
+        return;
+      }
+      setAccessReady(true);
+      setUiState('extracting');
+      const response = await send({ type: 'prepare_analysis', goal, mode });
+      if (isSuccessful(response, 'preview')) {
+        applyPreview(response.value);
+        return;
+      }
+      setError(messageForCode(responseCode(response)));
+      setUiState('retryable_error');
+    } finally {
+      extractionInFlight.current = false;
+    }
   };
 
   const refresh = async (): Promise<void> => {
     const response = await send({ type: 'get_state' });
-    if (isSuccessful(response, 'state')) {
-      applyState(response.value);
+    if (!isSuccessful(response, 'state')) {
+      setError(responseError(response));
+      setUiState('retryable_error');
       return;
     }
-    setError(responseError(response));
-    setUiState('error');
+    applyState(response.value);
+    await checkAndExtract();
   };
 
+  refreshRef.current = refresh;
+
   useEffect(() => {
-    void refresh();
+    void refreshRef.current?.();
   }, []);
 
-  const canAnalyze = useMemo(
-    () => goal.trim().length > 0 && (uiState === 'ready' || uiState === 'results' || uiState === 'no_useful_action'),
-    [goal, uiState],
+  useEffect(() => {
+    const handleActivated = (): void => {
+      if (extractionInFlight.current || analysisInFlight.current) return;
+      setPreview(undefined);
+      setResult(undefined);
+      setError('');
+      setNotice('');
+      setAccessReady(false);
+      setUiState('retryable_error');
+    };
+    browser.tabs.onActivated.addListener(handleActivated);
+    return () => browser.tabs.onActivated.removeListener(handleActivated);
+  }, []);
+
+  const canPreview = useMemo(
+    () => accessReady && uiState !== 'checking_page' && uiState !== 'extracting' && uiState !== 'analyzing',
+    [accessReady, uiState],
   );
 
   const saveKey = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -163,68 +252,59 @@ export default function App() {
     const response = await send({ type: 'save_key', apiKey: value });
     setApiKey('');
     if (isSuccessful(response, 'key_saved')) {
+      keyAvailable.current = true;
       setFingerprint(response.fingerprint);
-      setReceipt(undefined);
-      setPreview(undefined);
-      setResult(undefined);
-      setUiState('ready');
+      setUiState(preview && preview.candidateCount >= MIN_ITEMS ? 'awaiting_consent' : 'needs_key');
       setNotice('Key saved for this browser session only.');
     } else {
       setError(responseError(response));
-      setUiState('error');
+      setUiState('retryable_error');
     }
   };
 
   const prepare = async (): Promise<void> => {
-    setError('');
-    setNotice('');
-    setPreview(undefined);
-    setResult(undefined);
-    setUiState('extracting');
-    const response = await send({ type: 'prepare_analysis', goal, mode });
-    if (isSuccessful(response, 'preview')) {
-      setPreview(response.value);
-      if (response.value.candidates.length < 8) {
-        setError(`Only ${response.value.candidates.length} eligible posts are visible. Scroll X until at least 8 are in view, then preview again.`);
-        setUiState('insufficient_candidates');
-      } else {
-        setUiState('awaiting_consent');
-      }
-      return;
-    }
-    setError(responseError(response));
-    setUiState(responseCode(response) === 'missing_key' ? 'needs_key' : 'error');
+    await checkAndExtract();
   };
 
   const confirm = async (): Promise<void> => {
-    if (!preview || preview.candidates.length < 8) return;
-    setError('');
-    setNotice('');
-    setUiState('evaluating');
-    const response = await send({
-      type: 'confirm_analysis',
-      goal,
-      mode,
-      candidates: preview.candidates,
-    });
-    if (isSuccessful(response, 'analysis')) {
-      setResult(response.value);
-      setReceipt(response.value.receipt);
-      setUiState(response.value.noUsefulAction ? 'no_useful_action' : 'awaiting_outcome');
-      return;
+    if (!preview || preview.candidateCount < MIN_ITEMS || analysisInFlight.current) return;
+    analysisInFlight.current = true;
+    clearRecoverableError();
+    setUiState('analyzing');
+    try {
+      const response = await send({
+        type: 'confirm_analysis',
+        goal,
+        mode,
+        candidates: preview.candidates,
+        tabId: preview.tabId,
+        tabUrl: preview.tabUrl,
+      });
+      if (isSuccessful(response, 'analysis')) {
+        setResult(response.value);
+        setReceipt(response.value.receipt);
+        setUiState(response.value.noUsefulAction ? 'no_useful_action' : 'awaiting_outcome');
+        return;
+      }
+      setError(responseCode(response) === 'missing_key'
+        ? 'Save a TypeSafe AI API key before analyzing.'
+        : responseCode(response) === 'active_tab_changed'
+          ? messageForCode('active_tab_changed')
+          : responseError(response));
+      setUiState(responseCode(response) === 'missing_key' ? 'needs_key' : 'retryable_error');
+    } finally {
+      analysisInFlight.current = false;
     }
-    setError(responseError(response));
-    setUiState(responseCode(response) === 'missing_key' ? 'needs_key' : 'error');
   };
 
   const forgetKey = async (): Promise<void> => {
     const response = await send({ type: 'forget_key' });
     if (isSuccessful(response, 'key_forgotten')) {
+      keyAvailable.current = false;
       setFingerprint(undefined);
       setReceipt(undefined);
-      setPreview(undefined);
       setResult(undefined);
-      setUiState('needs_key');
+      setUiState(preview && preview.candidateCount >= MIN_ITEMS ? 'needs_key' : 'retryable_error');
       setNotice('The API key was removed from the session.');
     } else setError(responseError(response));
   };
@@ -232,6 +312,7 @@ export default function App() {
   const clearSession = async (): Promise<void> => {
     const response = await send({ type: 'clear_session' });
     if (isSuccessful(response, 'session_cleared')) {
+      keyAvailable.current = false;
       setApiKey('');
       setFingerprint(undefined);
       setPreview(undefined);
@@ -239,7 +320,7 @@ export default function App() {
       setReceipt(undefined);
       setReceiptHistory([]);
       setNotice('Session cache and receipt history cleared.');
-      setUiState('needs_key');
+      setUiState('ready');
     } else setError(responseError(response));
   };
 
@@ -248,9 +329,35 @@ export default function App() {
     if (isSuccessful(response, 'outcome')) {
       setReceipt(response.receipt);
       setReceiptHistory(response.receiptHistory ?? []);
-      setUiState('complete');
+      setUiState('completed');
       setNotice('Outcome recorded in the session receipt.');
     } else setError(responseError(response));
+  };
+
+  const grantXAccess = async (): Promise<void> => {
+    if (permissionInFlight.current) return;
+    permissionInFlight.current = true;
+    clearRecoverableError();
+    setUiState('checking_access');
+    try {
+      let granted: boolean;
+      try {
+        const alreadyGranted = await browser.permissions.contains({ origins: [...X_HOST_ORIGINS] });
+        granted = alreadyGranted || await browser.permissions.request({ origins: [...X_HOST_ORIGINS] });
+      } catch {
+        setError('Needle Lens could not verify permission. Try again.');
+        setUiState('retryable_error');
+        return;
+      }
+      if (!granted) {
+        setError('Access was not granted. Needle Lens cannot inspect posts until you allow access to x.com.');
+        setUiState('needs_x_access');
+        return;
+      }
+      await checkAndExtract();
+    } finally {
+      permissionInFlight.current = false;
+    }
   };
 
   const copyReceipt = async (): Promise<void> => {
@@ -267,7 +374,14 @@ export default function App() {
   const olderReceipts = receipt?.phase === 'complete'
     ? receiptHistory.slice(0, -1)
     : receiptHistory;
-  const loadingAnalysis = uiState === 'extracting' || uiState === 'evaluating';
+  const loadingAnalysis = uiState === 'extracting' || uiState === 'analyzing' || uiState === 'checking_page' || uiState === 'checking_access';
+  const showKeyStep = Boolean(preview && preview.candidateCount >= MIN_ITEMS);
+  const accessAction = accessReady && uiState !== 'needs_x_access' && uiState !== 'retryable_error'
+    ? checkAndExtract
+    : grantXAccess;
+  const accessActionLabel = uiState === 'needs_x_access' ? 'Grant access to X'
+    : uiState === 'unsupported_page' ? 'Check current tab'
+      : accessReady ? 'Retry extraction' : 'Try again';
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-4 px-4 py-5 text-sm sm:px-5">
@@ -309,7 +423,28 @@ export default function App() {
         <CardHeader className="border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-col gap-1">
-              <Badge variant="outline">01 / Your key</Badge>
+              <Badge variant="outline">01 / Access X</Badge>
+              <CardTitle>Read visible posts on x.com</CardTitle>
+            </div>
+            <Badge variant={accessReady ? 'secondary' : 'outline'}>{accessReady ? 'Verified' : 'Required'}</Badge>
+          </div>
+          <CardDescription>
+            Needle Lens reads only posts already rendered in the active X tab. It never requests broad browsing history access.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter className="flex-col items-stretch gap-3">
+          <Button type="button" size="lg" onClick={() => void accessAction()} disabled={loadingAnalysis}>
+            {loadingAnalysis && <Spinner data-icon="inline-start" />}
+            {accessActionLabel}
+          </Button>
+        </CardFooter>
+      </Card>
+
+      {showKeyStep && <Card>
+        <CardHeader className="border-b">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <Badge variant="outline">02 / Your key</Badge>
               <CardTitle>Bring your own TypeSafe key</CardTitle>
             </div>
             {fingerprint && (
@@ -353,13 +488,13 @@ export default function App() {
             Clear session
           </Button>
         </CardFooter>
-      </Card>
+      </Card>}
 
-      <Card>
+      {accessReady && <Card>
         <CardHeader className="border-b">
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-col gap-1">
-              <Badge variant="outline">02 / Shape the lens</Badge>
+              <Badge variant="outline">03 / Shape the lens</Badge>
               <CardTitle>What should stand out?</CardTitle>
             </div>
             <Badge variant="secondary">8–30 posts</Badge>
@@ -405,24 +540,24 @@ export default function App() {
             size="lg"
             className="w-full"
             onClick={prepare}
-            disabled={!canAnalyze || loadingAnalysis}
+            disabled={!canPreview || loadingAnalysis}
           >
             {loadingAnalysis && <Spinner data-icon="inline-start" />}
-            {uiState === 'extracting' ? 'Reading visible posts…' : uiState === 'evaluating' ? 'Evaluating visible posts…' : 'Preview visible posts'}
+            {uiState === 'extracting' ? 'Reading visible posts…' : uiState === 'analyzing' ? 'Evaluating visible posts…' : 'Preview visible posts'}
           </Button>
           <p className="text-xs leading-5 text-muted-foreground">
             Needle Lens reads only the X posts currently visible or just beyond the viewport. It does not scroll, click, post, follow, or message.
           </p>
         </CardFooter>
-      </Card>
+      </Card>}
 
-      {preview && (uiState === 'awaiting_consent' || uiState === 'insufficient_candidates') && (
+      {preview && (uiState === 'awaiting_consent' || uiState === 'insufficient_candidates' || uiState === 'retryable_error' || uiState === 'analyzing') && (
         <Card>
           <CardHeader className="border-b">
             <div className="flex items-start justify-between gap-3">
               <div className="flex flex-col gap-1">
-                <Badge variant="outline">03 / Confirm the handoff</Badge>
-                <CardTitle>{preview.candidates.length} posts are ready</CardTitle>
+                <Badge variant="outline">04 / Confirm the handoff</Badge>
+                <CardTitle>{preview.candidateCount} posts are ready</CardTitle>
               </div>
               <Badge variant="secondary">One request</Badge>
             </div>
@@ -439,7 +574,7 @@ export default function App() {
             </p>
           </CardContent>
           <CardFooter className="flex-wrap gap-2">
-            <Button type="button" size="lg" onClick={confirm} disabled={preview.candidates.length < 8}>
+            <Button type="button" size="lg" onClick={() => void confirm()} disabled={preview.candidateCount < MIN_ITEMS || uiState === 'analyzing'}>
               <HugeiconsIcon icon={LockKeyholeIcon} data-icon="inline-start" aria-hidden="true" />
               Send one decision request
             </Button>
@@ -448,7 +583,7 @@ export default function App() {
         </Card>
       )}
 
-      {result && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'complete') && (
+      {result && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'completed') && (
         <Card>
           <CardHeader className="border-b">
             <div className="flex items-start justify-between gap-3">
@@ -495,7 +630,7 @@ export default function App() {
         </Card>
       )}
 
-      {receipt && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'complete' || receipt.phase === 'complete') && (
+      {receipt && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'completed' || receipt.phase === 'complete') && (
         <Card>
           <CardHeader className="border-b">
             <div className="flex items-start justify-between gap-3">

@@ -4,7 +4,7 @@ Needle Lens is a BYOK, local-first browser extension. There is no Needle backend
 
 ## What is read
 
-After the user opens the panel and requests a preview, the extension reads only rendered `article` elements on the active `x.com` page that are visible or immediately adjacent to the viewport. It extracts post text, a displayed author label when available, a canonical status URL for a local **Open on X** link, and viewport position. Promoted containers, duplicate status IDs, empty text, and non-X tabs are rejected.
+After the user explicitly grants the two exact X host origins and requests a preview, the extension reads only rendered `article` elements on the active `x.com` page that are visible or immediately adjacent to the viewport. It extracts post text, a displayed author label when available, a canonical status URL for a local **Open on X** link, and viewport position. Promoted containers, duplicate status IDs, empty text, and non-X tabs are rejected.
 
 ## What can leave the browser
 

@@ -6,18 +6,38 @@ import type {
   VisibleCandidate,
 } from '../domain/types';
 import { MAX_ITEMS, MIN_ITEMS, MODEL, PROVIDER } from '../domain/types';
+import type { ActiveTabErrorCode } from '../security/active-x-tab';
+
+export type ExtensionErrorCode =
+  | ActiveTabErrorCode
+  | 'missing_key'
+  | 'insufficient_items'
+  | 'authentication'
+  | 'rate_limit'
+  | 'timeout'
+  | 'network'
+  | 'contract'
+  | 'provider'
+  | 'no_receipt'
+  | 'unauthorized_sender'
+  | 'invalid_message'
+  | 'runtime'
+  | 'internal';
 
 export type ExtensionMessage =
   | { type: 'get_state' }
   | { type: 'save_key'; apiKey: string }
   | { type: 'forget_key' }
   | { type: 'clear_session' }
+  | { type: 'check_page' }
   | { type: 'prepare_analysis'; goal: string; mode: Mode }
   | {
       type: 'confirm_analysis';
       goal: string;
       mode: Mode;
       candidates: VisibleCandidate[];
+      tabId: number;
+      tabUrl: string;
     }
   | { type: 'declare_outcome'; outcome: Outcome };
 
@@ -28,6 +48,9 @@ export type ResultCard = {
 
 export type AnalysisPreview = {
   candidates: VisibleCandidate[];
+  candidateCount: number;
+  tabId: number;
+  tabUrl: string;
   provider: typeof PROVIDER;
   model: typeof MODEL;
   fieldsLeavingBrowser: readonly string[];
@@ -50,13 +73,14 @@ export type BackgroundState = {
 
 export type ExtensionResponse =
   | { ok: true; type: 'state'; value: BackgroundState }
+  | { ok: true; type: 'page_checked'; value: { tabId: number; tabUrl: string } }
   | { ok: true; type: 'key_saved'; fingerprint: string }
   | { ok: true; type: 'key_forgotten' }
   | { ok: true; type: 'session_cleared' }
   | { ok: true; type: 'preview'; value: AnalysisPreview }
   | { ok: true; type: 'analysis'; value: AnalysisResult }
   | { ok: true; type: 'outcome'; receipt: SessionReceipt; receiptHistory?: SessionReceipt[] }
-  | { ok: false; error: string; code?: string };
+  | { ok: false; error: string; code?: ExtensionErrorCode };
 
 export const FIELDS_LEAVING_BROWSER = [
   'goal',
@@ -109,6 +133,7 @@ export function parseMessage(value: unknown): ExtensionMessage | undefined {
     case 'get_state':
     case 'forget_key':
     case 'clear_session':
+    case 'check_page':
       return { type: record.type };
     case 'save_key':
       return typeof record.apiKey === 'string' && record.apiKey.length >= 8 && !/[\r\n]/.test(record.apiKey)
@@ -118,18 +143,27 @@ export function parseMessage(value: unknown): ExtensionMessage | undefined {
       return typeof record.goal === 'string' && record.goal.trim().length > 0 && isMode(record.mode)
         ? { type: 'prepare_analysis', goal: record.goal.trim().slice(0, 500), mode: record.mode }
         : undefined;
-    case 'confirm_analysis':
+    case 'confirm_analysis': {
       return typeof record.goal === 'string' &&
         record.goal.trim().length > 0 &&
         isMode(record.mode) &&
-        isVisibleCandidateList(record.candidates)
+        isVisibleCandidateList(record.candidates) &&
+        typeof record.tabId === 'number' &&
+        Number.isInteger(record.tabId) &&
+        record.tabId >= 0 &&
+        typeof record.tabUrl === 'string' &&
+        record.tabUrl.length > 0 &&
+        record.tabUrl.length <= 4_000
         ? {
             type: 'confirm_analysis',
             goal: record.goal.trim().slice(0, 500),
             mode: record.mode,
             candidates: record.candidates,
+            tabId: record.tabId,
+            tabUrl: record.tabUrl,
           }
         : undefined;
+    }
     case 'declare_outcome':
       return isOutcome(record.outcome) ? { type: 'declare_outcome', outcome: record.outcome } : undefined;
     default:

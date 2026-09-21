@@ -46,21 +46,9 @@ for (const target of browsers) {
       const page = await context.newPage();
       await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
       await expect(page.getByRole('heading', { name: 'Needle Lens' })).toBeVisible();
-      await expect(page.getByText('Bring your own TypeSafe key')).toBeVisible();
-      const modeTrigger = page.getByRole('combobox', { name: 'Mode' });
-      await expect(modeTrigger).toBeVisible();
-      await modeTrigger.click();
-      await expect(page.getByRole('option', { name: 'Find problems' })).toBeVisible();
-      await page.keyboard.press('Escape');
-      const keyInput = page.getByLabel('TypeSafe AI API key');
-      await keyInput.fill('ts_test_key_123');
-      await page.getByRole('button', { name: 'Save key' }).click();
-      await expect(page.getByRole('status')).toContainText('Key saved for this browser session only.');
-      await expect(page.getByRole('button', { name: 'Forget key' })).toBeEnabled();
-      await page.getByRole('button', { name: 'Forget key' }).click();
-      await expect(page.getByRole('status')).toContainText('The API key was removed from the session.');
-      await page.getByRole('button', { name: 'Clear session' }).click();
-      await expect(page.getByRole('status')).toContainText('Session cache and receipt history cleared.');
+      await expect(page.getByText('Read visible posts on x.com')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Grant access to X' })).toBeVisible();
+      await expect(page.getByText('Bring your own TypeSafe key')).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -82,16 +70,14 @@ for (const target of browsers) {
       const extensionId = new URL(worker.url()).host;
       const page = await context.newPage();
       await page.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-      await page.getByLabel('TypeSafe AI API key').fill('ts_test_key_123');
-      await page.getByRole('button', { name: 'Save key' }).click();
-      await expect(page.getByRole('button', { name: 'Forget key' })).toBeEnabled();
+      await expect(page.getByRole('button', { name: 'Grant access to X' })).toBeVisible();
       await context.close();
 
       context = await launch();
       const restartedWorker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
       const restartedPage = await context.newPage();
       await restartedPage.goto(`chrome-extension://${new URL(restartedWorker.url()).host}/sidepanel.html`);
-      await expect(restartedPage.getByRole('button', { name: 'Forget key' })).toBeDisabled();
+      await expect(restartedPage.getByRole('button', { name: 'Grant access to X' })).toBeVisible();
       await expect(restartedPage.getByText(/session ·/)).toHaveCount(0);
     } finally {
       await context.close();

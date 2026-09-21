@@ -11,6 +11,7 @@ export default defineConfig({
     description:
       'Turn the information already in front of you into a finished session.',
     permissions: ['activeTab', 'scripting', 'storage', 'sidePanel'],
+    optional_host_permissions: ['https://x.com/*', 'https://www.x.com/*'],
     host_permissions: ['https://api.typesafe.ai/*'],
     action: {
       default_title: 'Open Needle Lens',

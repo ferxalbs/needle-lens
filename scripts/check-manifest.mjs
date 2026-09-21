@@ -11,8 +11,11 @@ if (permissions.size !== expected.size || [...expected].some((permission) => !pe
 if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(['https://api.typesafe.ai/*'])) {
   throw new Error(`Unexpected host permissions: ${JSON.stringify(manifest.host_permissions)}`);
 }
+if (JSON.stringify(manifest.optional_host_permissions) !== JSON.stringify(['https://x.com/*', 'https://www.x.com/*'])) {
+  throw new Error(`Unexpected optional host permissions: ${JSON.stringify(manifest.optional_host_permissions)}`);
+}
 for (const forbidden of ['<all_urls>', 'tabs', 'webRequest', 'unlimitedStorage', 'downloads']) {
-  if (permissions.has(forbidden) || (manifest.host_permissions ?? []).includes(forbidden)) {
+  if (permissions.has(forbidden) || (manifest.host_permissions ?? []).includes(forbidden) || (manifest.optional_host_permissions ?? []).includes(forbidden)) {
     throw new Error(`Forbidden broad permission present: ${forbidden}`);
   }
 }

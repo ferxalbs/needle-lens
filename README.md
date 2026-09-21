@@ -44,9 +44,9 @@ The browser smoke test launches Google Chrome directly, loads `.output/chrome-mv
 ## User flow
 
 1. Open X normally and keep the target posts visible.
-2. Open Needle Lens from the extension action and enter a goal and mode.
-3. Paste a TypeSafe-compatible API key. The key is held only in `chrome.storage.session`, is never returned to the UI after save, and is cleared by **Forget key**, **Clear session**, browser restart, or authentication failure.
-4. Preview the eligible visible posts. Preview performs extraction and cache inspection only; it does not call the provider.
+2. Open Needle Lens from the extension action and press **Grant access to X**. The panel requests only the exact `x.com` and `www.x.com` optional origins, then verifies the active HTTPS X tab.
+3. Preview the eligible visible posts. Preview performs extraction and cache inspection only; it does not call the provider. The key step appears only after enough candidates are extracted.
+4. Paste a TypeSafe-compatible API key. The key is held only in `chrome.storage.session`, is never returned to the UI after save, and is cleared by **Forget key**, **Clear session**, browser restart, or authentication failure.
 5. Confirm the handoff. The side panel names the exact fields leaving the browser, then the service worker sends one HTTPS request for uncached candidates.
 6. Review at most three `ACT` or `INSPECT` cards, optionally open the original post, declare an outcome, and copy the session receipt.
 
