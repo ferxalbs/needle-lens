@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
@@ -31,6 +31,7 @@ import { Badge } from './components/ui/badge';
 import { Button, buttonVariants } from './components/ui/button';
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -45,7 +46,8 @@ import {
   EmptyTitle,
 } from './components/ui/empty';
 import { Field, FieldDescription, FieldGroup, FieldLabel } from './components/ui/field';
-import { Input } from './components/ui/input';
+import { InputGroup, InputGroupAddon, InputGroupInput } from './components/ui/input-group';
+import { ScrollArea } from './components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { Separator } from './components/ui/separator';
 import { Spinner } from './components/ui/spinner';
@@ -128,7 +130,7 @@ export default function App() {
 
   const send = async (message: ExtensionMessage): Promise<ExtensionResponse> => {
     try {
-      return await browser.runtime.sendMessage(message) as ExtensionResponse;
+      return (await browser.runtime.sendMessage(message)) as ExtensionResponse;
     } catch {
       return { ok: false, error: 'The extension background worker is unavailable.', code: 'runtime' };
     }
@@ -185,9 +187,13 @@ export default function App() {
         setAccessReady(false);
         const code = responseCode(page);
         setError(messageForCode(code));
-        setUiState(code === 'permission_required' || code === 'permission_denied'
-          ? 'needs_x_access'
-          : code === 'unsupported_page' ? 'unsupported_page' : 'retryable_error');
+        setUiState(
+          code === 'permission_required' || code === 'permission_denied'
+            ? 'needs_x_access'
+            : code === 'unsupported_page'
+              ? 'unsupported_page'
+              : 'retryable_error',
+        );
         return;
       }
       setAccessReady(true);
@@ -286,11 +292,13 @@ export default function App() {
         setUiState(response.value.noUsefulAction ? 'no_useful_action' : 'awaiting_outcome');
         return;
       }
-      setError(responseCode(response) === 'missing_key'
-        ? 'Save a TypeSafe AI API key before analyzing.'
-        : responseCode(response) === 'active_tab_changed'
-          ? messageForCode('active_tab_changed')
-          : responseError(response));
+      setError(
+        responseCode(response) === 'missing_key'
+          ? 'Save a TypeSafe AI API key before analyzing.'
+          : responseCode(response) === 'active_tab_changed'
+            ? messageForCode('active_tab_changed')
+            : responseError(response),
+      );
       setUiState(responseCode(response) === 'missing_key' ? 'needs_key' : 'retryable_error');
     } finally {
       analysisInFlight.current = false;
@@ -343,7 +351,7 @@ export default function App() {
       let granted: boolean;
       try {
         const alreadyGranted = await browser.permissions.contains({ origins: [...X_HOST_ORIGINS] });
-        granted = alreadyGranted || await browser.permissions.request({ origins: [...X_HOST_ORIGINS] });
+        granted = alreadyGranted || (await browser.permissions.request({ origins: [...X_HOST_ORIGINS] }));
       } catch {
         setError('Needle Lens could not verify permission. Try again.');
         setUiState('retryable_error');
@@ -371,331 +379,418 @@ export default function App() {
     }
   };
 
-  const olderReceipts = receipt?.phase === 'complete'
-    ? receiptHistory.slice(0, -1)
-    : receiptHistory;
-  const loadingAnalysis = uiState === 'extracting' || uiState === 'analyzing' || uiState === 'checking_page' || uiState === 'checking_access';
+  const olderReceipts = receipt?.phase === 'complete' ? receiptHistory.slice(0, -1) : receiptHistory;
+  const loadingAnalysis =
+    uiState === 'extracting' || uiState === 'analyzing' || uiState === 'checking_page' || uiState === 'checking_access';
   const showKeyStep = Boolean(preview && preview.candidateCount >= MIN_ITEMS);
   const accessAction = accessReady && uiState !== 'needs_x_access' && uiState !== 'retryable_error'
     ? checkAndExtract
     : grantXAccess;
-  const accessActionLabel = uiState === 'needs_x_access' ? 'Grant access to X'
-    : uiState === 'unsupported_page' ? 'Check current tab'
-      : accessReady ? 'Retry extraction' : 'Try again';
+  const accessActionLabel =
+    uiState === 'needs_x_access'
+      ? 'Grant access to X'
+      : uiState === 'unsupported_page'
+        ? 'Check current tab'
+        : accessReady
+          ? 'Retry extraction'
+          : 'Try again';
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-4 px-4 py-5 text-sm sm:px-5">
-      <header className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-            <HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" />
-          </div>
-          <div className="min-w-0 flex flex-col gap-2">
-            <Badge variant="outline">Private BYOK workbench</Badge>
-            <h1 className="text-2xl font-semibold tracking-tight">Needle Lens</h1>
-            <p className="max-w-sm text-sm leading-5 text-muted-foreground">
-              Turn the posts already visible in front of you into a finished session.
-            </p>
-          </div>
-        </div>
-        <Badge variant="secondary" className="shrink-0">
-          <HugeiconsIcon icon={CheckmarkCircle02Icon} data-icon="inline-start" aria-hidden="true" />
-          Ready
-        </Badge>
-      </header>
-
-      {error && (
-        <Alert variant="destructive">
-          <HugeiconsIcon icon={AlertCircleIcon} aria-hidden="true" />
-          <AlertTitle>Something needs attention</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      {notice && (
-        <Alert role="status" className="border-primary/30 bg-primary/5">
-          <HugeiconsIcon icon={CheckmarkCircle02Icon} aria-hidden="true" />
-          <AlertTitle>Session updated</AlertTitle>
-          <AlertDescription>{notice}</AlertDescription>
-        </Alert>
-      )}
-
-      <Card>
-        <CardHeader className="border-b">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <Badge variant="outline">01 / Access X</Badge>
-              <CardTitle>Read visible posts on x.com</CardTitle>
-            </div>
-            <Badge variant={accessReady ? 'secondary' : 'outline'}>{accessReady ? 'Verified' : 'Required'}</Badge>
-          </div>
-          <CardDescription>
-            Needle Lens reads only posts already rendered in the active X tab. It never requests broad browsing history access.
-          </CardDescription>
-        </CardHeader>
-        <CardFooter className="flex-col items-stretch gap-3">
-          <Button type="button" size="lg" onClick={() => void accessAction()} disabled={loadingAnalysis}>
-            {loadingAnalysis && <Spinner data-icon="inline-start" />}
-            {accessActionLabel}
-          </Button>
-        </CardFooter>
-      </Card>
-
-      {showKeyStep && <Card>
-        <CardHeader className="border-b">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <Badge variant="outline">02 / Your key</Badge>
-              <CardTitle>Bring your own TypeSafe key</CardTitle>
-            </div>
-            {fingerprint && (
-              <Badge variant="secondary" className="max-w-44 truncate">session · {fingerprint}</Badge>
-            )}
-          </div>
-          <CardDescription>
-            Stored in memory-only extension storage. It never enters the page, cache, receipt, or content script.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <form onSubmit={saveKey}>
-            <FieldGroup className="gap-3">
-              <Field>
-                <FieldLabel htmlFor="api-key" className="sr-only">TypeSafe AI API key</FieldLabel>
-                <div className="flex gap-2">
-                  <Input
-                    id="api-key"
-                    type="password"
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.currentTarget.value)}
-                    placeholder="ts_…"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="h-9"
-                  />
-                  <Button type="submit" size="lg" className="shrink-0">
-                    <HugeiconsIcon icon={KeyRoundIcon} data-icon="inline-start" aria-hidden="true" />
-                    Save key
-                  </Button>
-                </div>
-              </Field>
-            </FieldGroup>
-          </form>
-        </CardContent>
-        <CardFooter className="flex-wrap gap-2">
-          <Button variant="outline" size="sm" type="button" onClick={forgetKey} disabled={!fingerprint}>
-            Forget key
-          </Button>
-          <Button variant="destructive" size="sm" type="button" onClick={clearSession}>
-            Clear session
-          </Button>
-        </CardFooter>
-      </Card>}
-
-      {accessReady && <Card>
-        <CardHeader className="border-b">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <Badge variant="outline">03 / Shape the lens</Badge>
-              <CardTitle>What should stand out?</CardTitle>
-            </div>
-            <Badge variant="secondary">8–30 posts</Badge>
-          </div>
-          <CardDescription>Describe the outcome you want from the posts currently visible on X.</CardDescription>
-        </CardHeader>
-        <CardContent className="pt-4">
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="goal">Goal</FieldLabel>
-              <Textarea
-                id="goal"
-                rows={3}
-                value={goal}
-                onChange={(event) => setGoal(event.currentTarget.value)}
-              />
-              <FieldDescription>Be specific about the people, problems, or signals worth surfacing.</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="mode">Mode</FieldLabel>
-              <Select<Mode>
-                value={mode}
-                items={MODE_ITEMS}
-                onValueChange={(value) => { if (value) setMode(value); }}
-              >
-                <SelectTrigger id="mode" aria-label="Mode" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {MODE_ITEMS.map((item) => (
-                      <SelectItem value={item.value} key={item.value}>{item.label}</SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-          </FieldGroup>
-        </CardContent>
-        <CardFooter className="flex-col items-stretch gap-3">
-          <Button
-            type="button"
-            size="lg"
-            className="w-full"
-            onClick={prepare}
-            disabled={!canPreview || loadingAnalysis}
-          >
-            {loadingAnalysis && <Spinner data-icon="inline-start" />}
-            {uiState === 'extracting' ? 'Reading visible posts…' : uiState === 'analyzing' ? 'Evaluating visible posts…' : 'Preview visible posts'}
-          </Button>
-          <p className="text-xs leading-5 text-muted-foreground">
-            Needle Lens reads only the X posts currently visible or just beyond the viewport. It does not scroll, click, post, follow, or message.
-          </p>
-        </CardFooter>
-      </Card>}
-
-      {preview && (uiState === 'awaiting_consent' || uiState === 'insufficient_candidates' || uiState === 'retryable_error' || uiState === 'analyzing') && (
-        <Card>
-          <CardHeader className="border-b">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <Badge variant="outline">04 / Confirm the handoff</Badge>
-                <CardTitle>{preview.candidateCount} posts are ready</CardTitle>
+    <ScrollArea className="h-screen w-full">
+      <main className="mx-auto flex min-h-full w-full max-w-xl flex-col gap-4 p-4 text-sm sm:p-5">
+        <header className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+                <HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" />
               </div>
-              <Badge variant="secondary">One request</Badge>
+              <div className="flex flex-col">
+                <h1 className="text-xl font-semibold tracking-tight">Needle Lens</h1>
+                <p className="text-xs text-muted-foreground">Private BYOK workbench</p>
+              </div>
             </div>
+            <Badge variant="secondary" className="gap-1.5">
+              <HugeiconsIcon icon={CheckmarkCircle02Icon} data-icon="inline-start" aria-hidden="true" />
+              Ready
+            </Badge>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Turn the posts already visible in front of you into a finished session.
+          </p>
+        </header>
+
+        {error && (
+          <Alert variant="destructive">
+            <HugeiconsIcon icon={AlertCircleIcon} aria-hidden="true" />
+            <AlertTitle>Something needs attention</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {notice && (
+          <Alert role="status">
+            <HugeiconsIcon icon={CheckmarkCircle02Icon} aria-hidden="true" />
+            <AlertTitle>Session updated</AlertTitle>
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Read visible posts on x.com</CardTitle>
             <CardDescription>
-              Nothing has left this browser yet. If you continue, the fields below go directly to {preview.provider}.
+              Needle Lens reads only posts already rendered in the active X tab. It never requests broad browsing history access.
             </CardDescription>
+            <CardAction>
+              <Badge variant={accessReady ? 'secondary' : 'outline'}>
+                {accessReady ? 'Verified' : 'Required'}
+              </Badge>
+            </CardAction>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4 pt-4">
-            <div className="flex flex-wrap gap-2">
-              {FIELDS_LEAVING_BROWSER.map((field) => <Badge variant="secondary" key={field}>{field}</Badge>)}
-            </div>
-            <p className="text-xs leading-5 text-muted-foreground">
-              Provider: {preview.provider} · model: {preview.model} · cache hits: {preview.cacheHits} · new evaluations: {preview.providerEvaluated}
-            </p>
-          </CardContent>
-          <CardFooter className="flex-wrap gap-2">
-            <Button type="button" size="lg" onClick={() => void confirm()} disabled={preview.candidateCount < MIN_ITEMS || uiState === 'analyzing'}>
-              <HugeiconsIcon icon={LockKeyholeIcon} data-icon="inline-start" aria-hidden="true" />
-              Send one decision request
+          <CardFooter>
+            <Button
+              type="button"
+              className="w-full"
+              onClick={() => void accessAction()}
+              disabled={loadingAnalysis}
+            >
+              {loadingAnalysis && <Spinner data-icon="inline-start" />}
+              {accessActionLabel}
             </Button>
-            <Button variant="outline" type="button" onClick={() => setPreview(undefined)}>Cancel</Button>
           </CardFooter>
         </Card>
-      )}
 
-      {result && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'completed') && (
-        <Card>
-          <CardHeader className="border-b">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <Badge variant="outline">04 / Your shortlist</Badge>
-                <CardTitle>{result.noUsefulAction ? 'No safe action surfaced' : `${result.cards.length} useful lead${result.cards.length === 1 ? '' : 's'}`}</CardTitle>
-              </div>
-              <Badge variant="secondary">Max 3 shown</Badge>
-            </div>
-            <CardDescription>Decisions stay scoped to the visible posts. Needle never manufactures a lead.</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 pt-4">
-            {result.cards.length > 0 ? result.cards.map(({ candidate, decision }) => (
-              <Card size="sm" className="bg-background/60" key={candidate.id}>
-                <CardHeader className="gap-2">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={decisionVariant(decision.label)}>{decision.label.toUpperCase()}</Badge>
-                    {candidate.author && <span className="min-w-0 truncate text-xs text-muted-foreground">{candidate.author}</span>}
-                  </div>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-2 pb-3">
-                  <p className="text-sm leading-5">{candidate.text}</p>
-                  <p className="text-xs leading-5 text-muted-foreground">{decision.reason}</p>
-                </CardContent>
-                {candidate.canonicalUrl && (
-                  <CardFooter className="justify-end border-t-0 bg-transparent pt-0">
-                    <a className={buttonVariants({ variant: 'link', size: 'sm' })} href={candidate.canonicalUrl} target="_blank" rel="noreferrer">
-                      Open on X
-                      <HugeiconsIcon icon={ExternalLinkIcon} data-icon="inline-end" aria-hidden="true" />
-                    </a>
-                  </CardFooter>
-                )}
-              </Card>
-            )) : (
-              <Empty className="border-border bg-background/40">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon"><HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" /></EmptyMedia>
-                  <EmptyTitle>No useful action found</EmptyTitle>
-                  <EmptyDescription>Needle did not manufacture one. Try a sharper goal or a different mode.</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-          </CardContent>
-        </Card>
-      )}
+        {showKeyStep && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Bring your own TypeSafe key</CardTitle>
+              <CardDescription>
+                Stored in memory-only extension storage. It never enters the page, cache, receipt, or content script.
+              </CardDescription>
+              {fingerprint && (
+                <CardAction>
+                  <Badge variant="secondary" className="max-w-40 truncate">
+                    session · {fingerprint}
+                  </Badge>
+                </CardAction>
+              )}
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveKey}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="api-key" className="sr-only">
+                      TypeSafe AI API key
+                    </FieldLabel>
+                    <InputGroup className="h-9">
+                      <InputGroupInput
+                        id="api-key"
+                        type="password"
+                        value={apiKey}
+                        onChange={(event) => setApiKey(event.currentTarget.value)}
+                        placeholder="ts_…"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <Button type="submit" size="xs">
+                          <HugeiconsIcon icon={KeyRoundIcon} data-icon="inline-start" aria-hidden="true" />
+                          Save key
+                        </Button>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  </Field>
+                </FieldGroup>
+              </form>
+            </CardContent>
+            <CardFooter className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" type="button" onClick={forgetKey} disabled={!fingerprint}>
+                Forget key
+              </Button>
+              <Button variant="destructive" size="sm" type="button" onClick={clearSession}>
+                Clear session
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
 
-      {receipt && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'completed' || receipt.phase === 'complete') && (
-        <Card>
-          <CardHeader className="border-b">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <Badge variant="outline">05 / Close the loop</Badge>
-                <CardTitle>{receipt.phase === 'complete' ? 'Session complete' : 'Record what happened'}</CardTitle>
-              </div>
-              <Badge variant={receipt.phase === 'complete' ? 'secondary' : 'outline'}>{receipt.totalLatencyMs} ms</Badge>
-            </div>
-            <CardDescription>
-              {receipt.phase === 'complete' ? 'This receipt is complete and ready to keep.' : 'Choose the closest honest outcome. This is local session bookkeeping, not an automated action.'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4 pt-4">
-            {receipt.phase === 'awaiting_outcome' && (
-              <FieldGroup className="gap-3">
+        {accessReady && (
+          <Card>
+            <CardHeader>
+              <CardTitle>What should stand out?</CardTitle>
+              <CardDescription>
+                Describe the outcome you want from the posts currently visible on X.
+              </CardDescription>
+              <CardAction>
+                <Badge variant="secondary">8–30 posts</Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              <FieldGroup className="gap-4">
                 <Field>
-                  <FieldLabel>Outcome</FieldLabel>
-                  <ToggleGroup
-                    aria-label="Session outcome"
-                    variant="outline"
-                    spacing={1}
-                    value={[]}
-                    onValueChange={(values) => {
-                      const outcome = values[0] as Outcome | undefined;
-                      if (outcome) void declareOutcome(outcome);
+                  <FieldLabel htmlFor="goal">Goal</FieldLabel>
+                  <Textarea
+                    id="goal"
+                    rows={3}
+                    value={goal}
+                    onChange={(event) => setGoal(event.currentTarget.value)}
+                  />
+                  <FieldDescription>
+                    Be specific about the people, problems, or signals worth surfacing.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="mode">Mode</FieldLabel>
+                  <Select<Mode>
+                    value={mode}
+                    items={MODE_ITEMS}
+                    onValueChange={(value) => {
+                      if (value) setMode(value);
                     }}
-                    className="grid w-full grid-cols-2"
                   >
-                    {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => (
-                      <ToggleGroupItem value={outcome} key={outcome}>{OUTCOME_LABELS[outcome]}</ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
+                    <SelectTrigger id="mode" aria-label="Mode" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {MODE_ITEMS.map((item) => (
+                          <SelectItem value={item.value} key={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </Field>
               </FieldGroup>
-            )}
-            <pre className="max-h-72 overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap">{formatReceipt(receipt)}</pre>
-            {olderReceipts.length > 0 && (
-              <>
-                <Separator />
-                <details className="group">
-                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
-                    Earlier session receipts ({olderReceipts.length})
-                  </summary>
-                  <div className="mt-3 flex flex-col gap-3">
-                    {olderReceipts.slice().reverse().map((historyReceipt) => (
-                      <pre className="overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap" key={`${historyReceipt.completedAt ?? historyReceipt.totalLatencyMs}-${historyReceipt.goal}`}>
-                        {formatReceipt(historyReceipt)}
-                      </pre>
-                    ))}
-                  </div>
-                </details>
-              </>
-            )}
-          </CardContent>
-          <CardFooter className="justify-end">
-            <Button variant="outline" type="button" onClick={copyReceipt}>{copyLabel}</Button>
-          </CardFooter>
-        </Card>
-      )}
+            </CardContent>
+            <CardFooter className="flex-col items-stretch gap-2.5">
+              <Button
+                type="button"
+                className="w-full"
+                onClick={prepare}
+                disabled={!canPreview || loadingAnalysis}
+              >
+                {loadingAnalysis && <Spinner data-icon="inline-start" />}
+                {uiState === 'extracting'
+                  ? 'Reading visible posts…'
+                  : uiState === 'analyzing'
+                    ? 'Evaluating visible posts…'
+                    : 'Preview visible posts'}
+              </Button>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Needle Lens reads only the X posts currently visible or just beyond the viewport. It does not scroll, click, post, follow, or message.
+              </p>
+            </CardFooter>
+          </Card>
+        )}
 
-      <footer className="flex items-center justify-between gap-3 px-1 pb-1 text-[11px] text-muted-foreground">
-        <span>Local-first · one consented provider request</span>
-        <Badge variant="outline" className="capitalize">{stateLabel(uiState)}</Badge>
-      </footer>
-    </main>
+        {preview &&
+          (uiState === 'awaiting_consent' ||
+            uiState === 'insufficient_candidates' ||
+            uiState === 'retryable_error' ||
+            uiState === 'analyzing') && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{preview.candidateCount} posts are ready</CardTitle>
+                <CardDescription>
+                  Nothing has left this browser yet. If you continue, the fields below go directly to {preview.provider}.
+                </CardDescription>
+                <CardAction>
+                  <Badge variant="secondary">One request</Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {FIELDS_LEAVING_BROWSER.map((field) => (
+                    <Badge variant="outline" key={field}>
+                      {field}
+                    </Badge>
+                  ))}
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Provider: {preview.provider} · model: {preview.model} · cache hits: {preview.cacheHits} · new evaluations: {preview.providerEvaluated}
+                </p>
+              </CardContent>
+              <CardFooter className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={() => void confirm()}
+                  disabled={preview.candidateCount < MIN_ITEMS || uiState === 'analyzing'}
+                >
+                  <HugeiconsIcon icon={LockKeyholeIcon} data-icon="inline-start" aria-hidden="true" />
+                  Send one decision request
+                </Button>
+                <Button variant="outline" type="button" onClick={() => setPreview(undefined)}>
+                  Cancel
+                </Button>
+              </CardFooter>
+            </Card>
+          )}
+
+        {result &&
+          (uiState === 'results' ||
+            uiState === 'no_useful_action' ||
+            uiState === 'awaiting_outcome' ||
+            uiState === 'completed') && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {result.noUsefulAction
+                    ? 'No safe action surfaced'
+                    : `${result.cards.length} useful lead${result.cards.length === 1 ? '' : 's'}`}
+                </CardTitle>
+                <CardDescription>
+                  Decisions stay scoped to the visible posts. Needle never manufactures a lead.
+                </CardDescription>
+                <CardAction>
+                  <Badge variant="secondary">Max 3 shown</Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {result.cards.length > 0 ? (
+                  result.cards.map(({ candidate, decision }) => (
+                    <Card size="sm" key={candidate.id}>
+                      <CardHeader className="gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <Badge variant={decisionVariant(decision.label)}>
+                            {decision.label.toUpperCase()}
+                          </Badge>
+                          {candidate.author && (
+                            <span className="min-w-0 truncate text-xs text-muted-foreground">
+                              {candidate.author}
+                            </span>
+                          )}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-2">
+                        <p className="text-sm leading-relaxed">{candidate.text}</p>
+                        <p className="text-xs leading-relaxed text-muted-foreground">{decision.reason}</p>
+                      </CardContent>
+                      {candidate.canonicalUrl && (
+                        <CardFooter className="justify-end pt-0">
+                          <a
+                            className={buttonVariants({ variant: 'link', size: 'sm' })}
+                            href={candidate.canonicalUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open on X
+                            <HugeiconsIcon icon={ExternalLinkIcon} data-icon="inline-end" aria-hidden="true" />
+                          </a>
+                        </CardFooter>
+                      )}
+                    </Card>
+                  ))
+                ) : (
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" />
+                      </EmptyMedia>
+                      <EmptyTitle>No useful action found</EmptyTitle>
+                      <EmptyDescription>
+                        Needle did not manufacture one. Try a sharper goal or a different mode.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+        {receipt &&
+          (uiState === 'results' ||
+            uiState === 'no_useful_action' ||
+            uiState === 'awaiting_outcome' ||
+            uiState === 'completed' ||
+            receipt.phase === 'complete') && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {receipt.phase === 'complete' ? 'Session complete' : 'Record what happened'}
+                </CardTitle>
+                <CardDescription>
+                  {receipt.phase === 'complete'
+                    ? 'This receipt is complete and ready to keep.'
+                    : 'Choose the closest honest outcome. This is local session bookkeeping, not an automated action.'}
+                </CardDescription>
+                <CardAction>
+                  <Badge variant={receipt.phase === 'complete' ? 'secondary' : 'outline'}>
+                    {receipt.totalLatencyMs} ms
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4">
+                {receipt.phase === 'awaiting_outcome' && (
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel>Outcome</FieldLabel>
+                      <ToggleGroup
+                        aria-label="Session outcome"
+                        variant="outline"
+                        spacing={1}
+                        value={[]}
+                        onValueChange={(values) => {
+                          const outcome = values[0] as Outcome | undefined;
+                          if (outcome) void declareOutcome(outcome);
+                        }}
+                        className="grid w-full grid-cols-2"
+                      >
+                        {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => (
+                          <ToggleGroupItem value={outcome} key={outcome}>
+                            {OUTCOME_LABELS[outcome]}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </Field>
+                  </FieldGroup>
+                )}
+                <ScrollArea className="max-h-64 rounded-xl border bg-muted/20">
+                  <pre className="p-3 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                    {formatReceipt(receipt)}
+                  </pre>
+                </ScrollArea>
+                {olderReceipts.length > 0 && (
+                  <>
+                    <Separator />
+                    <details className="group">
+                      <summary className="cursor-pointer text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+                        Earlier session receipts ({olderReceipts.length})
+                      </summary>
+                      <div className="mt-3 flex flex-col gap-3">
+                        {olderReceipts
+                          .slice()
+                          .reverse()
+                          .map((historyReceipt) => (
+                            <ScrollArea
+                              key={`${historyReceipt.completedAt ?? historyReceipt.totalLatencyMs}-${historyReceipt.goal}`}
+                              className="max-h-48 rounded-xl border bg-muted/20"
+                            >
+                              <pre className="p-3 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                                {formatReceipt(historyReceipt)}
+                              </pre>
+                            </ScrollArea>
+                          ))}
+                      </div>
+                    </details>
+                  </>
+                )}
+              </CardContent>
+              <CardFooter className="justify-end">
+                <Button variant="outline" type="button" onClick={copyReceipt}>
+                  {copyLabel}
+                </Button>
+              </CardFooter>
+            </Card>
+          )}
+
+        <footer className="flex items-center justify-between gap-3 px-1 py-1 text-xs text-muted-foreground">
+          <span>Local-first · one consented provider request</span>
+          <Badge variant="outline" className="capitalize">
+            {stateLabel(uiState)}
+          </Badge>
+        </footer>
+      </main>
+    </ScrollArea>
   );
 }

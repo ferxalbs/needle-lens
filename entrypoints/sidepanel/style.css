@@ -186,12 +186,9 @@
     @apply border-border outline-ring/50;
   }
 
-  html {
-    @apply font-sans;
-  }
-
+  html,
   body {
-    @apply min-h-screen bg-background text-foreground;
+    @apply font-sans h-full overflow-hidden bg-background text-foreground;
     background-image: radial-gradient(circle at 100% 0%, color-mix(in oklch, var(--primary) 12%, transparent), transparent 28rem);
   }
 
@@ -202,6 +199,7 @@
 }
 
 #root {
-  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
   isolation: isolate;
 }

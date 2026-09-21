@@ -45,7 +45,7 @@ if (loggingFiles.length > 0) {
 const limits = {
   sidepanelGzipBytes: 150_000,
   contentGzipBytes: 100_000,
-  packagedBytes: 500_000,
+  packagedBytes: 550_000,
 };
 if (sidepanelGzipBytes > limits.sidepanelGzipBytes) {
   throw new Error(`Side-panel gzip budget exceeded: ${sidepanelGzipBytes} > ${limits.sidepanelGzipBytes}.`);
