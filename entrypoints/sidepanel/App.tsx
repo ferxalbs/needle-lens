@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button } from '@base-ui/react/button';
-import { Select } from '@base-ui/react/select';
+import { HugeiconsIcon } from '@hugeicons/react';
+import {
+  AlertCircleIcon,
+  CheckmarkCircle02Icon,
+  ExternalLinkIcon,
+  KeyRoundIcon,
+  LockKeyholeIcon,
+  WandSparklesIcon,
+} from '@hugeicons/core-free-icons';
 import type { ExtensionMessage, ExtensionResponse } from '../../src/messaging/protocol';
 import {
   FIELDS_LEAVING_BROWSER,
@@ -12,11 +19,37 @@ import {
 import {
   MODE_LABELS,
   OUTCOME_LABELS,
+  type DecisionLabel,
   type Mode,
   type Outcome,
   type SessionReceipt,
 } from '../../src/domain/types';
 import { formatReceipt } from '../../src/domain/receipt';
+import { Alert, AlertDescription, AlertTitle } from './components/ui/alert';
+import { Badge } from './components/ui/badge';
+import { Button, buttonVariants } from './components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from './components/ui/card';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from './components/ui/empty';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from './components/ui/field';
+import { Input } from './components/ui/input';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
+import { Separator } from './components/ui/separator';
+import { Spinner } from './components/ui/spinner';
+import { Textarea } from './components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from './components/ui/toggle-group';
 
 type UiState =
   | 'loading'
@@ -32,8 +65,13 @@ type UiState =
   | 'complete'
   | 'error';
 type SuccessfulResponse = Extract<ExtensionResponse, { ok: true }>;
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
 
 const DEFAULT_GOAL = 'Find people who can help with a concrete problem or opportunity.';
+const MODE_ITEMS = (Object.keys(MODE_LABELS) as Mode[]).map((value) => ({
+  value,
+  label: MODE_LABELS[value],
+}));
 
 function isSuccessful<T extends SuccessfulResponse['type']>(
   response: ExtensionResponse,
@@ -48,6 +86,18 @@ function responseError(response: ExtensionResponse): string {
 
 function responseCode(response: ExtensionResponse): string | undefined {
   return response.ok ? undefined : response.code;
+}
+
+function decisionVariant(label: DecisionLabel): BadgeVariant {
+  if (label === 'act') return 'default';
+  if (label === 'pass') return 'destructive';
+  if (label === 'inspect') return 'secondary';
+  return 'outline';
+}
+
+function stateLabel(state: UiState): string {
+  if (state === 'loading') return 'Warming up…';
+  return state.replaceAll('_', ' ');
 }
 
 export default function App() {
@@ -217,167 +267,299 @@ export default function App() {
   const olderReceipts = receipt?.phase === 'complete'
     ? receiptHistory.slice(0, -1)
     : receiptHistory;
+  const loadingAnalysis = uiState === 'extracting' || uiState === 'evaluating';
 
   return (
-    <main className="shell">
-      <header className="masthead">
-        <div>
-          <p className="eyebrow">PRIVATE BYOK WORKBENCH</p>
-          <h1>Needle Lens</h1>
-          <p className="lede">Turn the posts already visible in front of you into a finished session.</p>
+    <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-4 px-4 py-5 text-sm sm:px-5">
+      <header className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex flex-col gap-2">
+            <Badge variant="outline">Private BYOK workbench</Badge>
+            <h1 className="text-2xl font-semibold tracking-tight">Needle Lens</h1>
+            <p className="max-w-sm text-sm leading-5 text-muted-foreground">
+              Turn the posts already visible in front of you into a finished session.
+            </p>
+          </div>
         </div>
-        <span className="status-dot" aria-label="Extension ready" />
+        <Badge variant="secondary" className="shrink-0">
+          <HugeiconsIcon icon={CheckmarkCircle02Icon} data-icon="inline-start" aria-hidden="true" />
+          Ready
+        </Badge>
       </header>
 
-      {error && <div className="callout error" role="alert">{error}</div>}
-      {notice && <div className="callout notice" role="status">{notice}</div>}
+      {error && (
+        <Alert variant="destructive">
+          <HugeiconsIcon icon={AlertCircleIcon} aria-hidden="true" />
+          <AlertTitle>Something needs attention</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {notice && (
+        <Alert role="status" className="border-primary/30 bg-primary/5">
+          <HugeiconsIcon icon={CheckmarkCircle02Icon} aria-hidden="true" />
+          <AlertTitle>Session updated</AlertTitle>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      )}
 
-      <section className="panel key-panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">01 / YOUR KEY</p>
-            <h2>Bring your own TypeSafe key</h2>
+      <Card>
+        <CardHeader className="border-b">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <Badge variant="outline">01 / Your key</Badge>
+              <CardTitle>Bring your own TypeSafe key</CardTitle>
+            </div>
+            {fingerprint && (
+              <Badge variant="secondary" className="max-w-44 truncate">session · {fingerprint}</Badge>
+            )}
           </div>
-          {fingerprint && <span className="badge">session · {fingerprint}</span>}
-        </div>
-        <p className="muted">Stored in memory-only extension storage. It never enters the page, cache, receipt, or content script.</p>
-        <form className="key-form" onSubmit={saveKey}>
-          <label className="sr-only" htmlFor="api-key">TypeSafe AI API key</label>
-          <input
-            id="api-key"
-            type="password"
-            value={apiKey}
-            onInput={(event) => setApiKey((event.currentTarget as HTMLInputElement).value)}
-            placeholder="ts_…"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <Button className="button primary" type="submit">Save key</Button>
-        </form>
-        <div className="button-row compact">
-          <Button className="button quiet" type="button" onClick={forgetKey} disabled={!fingerprint}>Forget key</Button>
-          <Button className="button quiet danger" type="button" onClick={clearSession}>Clear session</Button>
-        </div>
-      </section>
+          <CardDescription>
+            Stored in memory-only extension storage. It never enters the page, cache, receipt, or content script.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <form onSubmit={saveKey}>
+            <FieldGroup className="gap-3">
+              <Field>
+                <FieldLabel htmlFor="api-key" className="sr-only">TypeSafe AI API key</FieldLabel>
+                <div className="flex gap-2">
+                  <Input
+                    id="api-key"
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.currentTarget.value)}
+                    placeholder="ts_…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="h-9"
+                  />
+                  <Button type="submit" size="lg" className="shrink-0">
+                    <HugeiconsIcon icon={KeyRoundIcon} data-icon="inline-start" aria-hidden="true" />
+                    Save key
+                  </Button>
+                </div>
+              </Field>
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter className="flex-wrap gap-2">
+          <Button variant="outline" size="sm" type="button" onClick={forgetKey} disabled={!fingerprint}>
+            Forget key
+          </Button>
+          <Button variant="destructive" size="sm" type="button" onClick={clearSession}>
+            Clear session
+          </Button>
+        </CardFooter>
+      </Card>
 
-      <section className="panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">02 / SHAPE THE LENS</p>
-            <h2>What should stand out?</h2>
+      <Card>
+        <CardHeader className="border-b">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <Badge variant="outline">02 / Shape the lens</Badge>
+              <CardTitle>What should stand out?</CardTitle>
+            </div>
+            <Badge variant="secondary">8–30 posts</Badge>
           </div>
-          <span className="step-number">8–30</span>
-        </div>
-        <label htmlFor="goal">Goal</label>
-        <textarea id="goal" rows={3} value={goal} onInput={(event) => setGoal((event.currentTarget as HTMLTextAreaElement).value)} />
-        <Select.Root<Mode>
-          value={mode}
-          items={(Object.keys(MODE_LABELS) as Mode[]).map((key) => ({ value: key, label: MODE_LABELS[key] }))}
-          onValueChange={(value) => { if (value) setMode(value); }}
-        >
-          <Select.Label className="select-label">Mode</Select.Label>
-          <Select.Trigger className="select-trigger" aria-label="Mode">
-            <Select.Value />
-            <Select.Icon className="select-icon" aria-hidden="true">⌄</Select.Icon>
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Positioner className="select-positioner" sideOffset={4}>
-              <Select.Popup className="select-popup">
-                <Select.List>
-                  {(Object.keys(MODE_LABELS) as Mode[]).map((key) => (
-                    <Select.Item className="select-item" value={key} key={key}>
-                      <Select.ItemText>{MODE_LABELS[key]}</Select.ItemText>
-                      <Select.ItemIndicator>✓</Select.ItemIndicator>
-                    </Select.Item>
-                  ))}
-                </Select.List>
-              </Select.Popup>
-            </Select.Positioner>
-          </Select.Portal>
-        </Select.Root>
-        <Button className="button primary wide" type="button" onClick={prepare} disabled={!canAnalyze || uiState === 'extracting' || uiState === 'evaluating'}>
-          {uiState === 'extracting' ? 'Reading visible posts…' : uiState === 'evaluating' ? 'Evaluating visible posts…' : 'Preview visible posts'}
-        </Button>
-        <p className="microcopy">Needle Lens reads only the X posts currently visible or just beyond the viewport. It does not scroll, click, post, follow, or message.</p>
-      </section>
+          <CardDescription>Describe the outcome you want from the posts currently visible on X.</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="goal">Goal</FieldLabel>
+              <Textarea
+                id="goal"
+                rows={3}
+                value={goal}
+                onChange={(event) => setGoal(event.currentTarget.value)}
+              />
+              <FieldDescription>Be specific about the people, problems, or signals worth surfacing.</FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="mode">Mode</FieldLabel>
+              <Select<Mode>
+                value={mode}
+                items={MODE_ITEMS}
+                onValueChange={(value) => { if (value) setMode(value); }}
+              >
+                <SelectTrigger id="mode" aria-label="Mode" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {MODE_ITEMS.map((item) => (
+                      <SelectItem value={item.value} key={item.value}>{item.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          </FieldGroup>
+        </CardContent>
+        <CardFooter className="flex-col items-stretch gap-3">
+          <Button
+            type="button"
+            size="lg"
+            className="w-full"
+            onClick={prepare}
+            disabled={!canAnalyze || loadingAnalysis}
+          >
+            {loadingAnalysis && <Spinner data-icon="inline-start" />}
+            {uiState === 'extracting' ? 'Reading visible posts…' : uiState === 'evaluating' ? 'Evaluating visible posts…' : 'Preview visible posts'}
+          </Button>
+          <p className="text-xs leading-5 text-muted-foreground">
+            Needle Lens reads only the X posts currently visible or just beyond the viewport. It does not scroll, click, post, follow, or message.
+          </p>
+        </CardFooter>
+      </Card>
 
       {preview && (uiState === 'awaiting_consent' || uiState === 'insufficient_candidates') && (
-        <section className="panel consent-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">03 / CONFIRM THE HANDOFF</p>
-              <h2>{preview.candidates.length} posts are ready</h2>
+        <Card>
+          <CardHeader className="border-b">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <Badge variant="outline">03 / Confirm the handoff</Badge>
+                <CardTitle>{preview.candidates.length} posts are ready</CardTitle>
+              </div>
+              <Badge variant="secondary">One request</Badge>
             </div>
-            <span className="badge warm">one request</span>
-          </div>
-          <p className="muted">Nothing has left this browser yet. If you continue, the fields below go directly to {preview.provider}.</p>
-          <div className="field-list">
-            {FIELDS_LEAVING_BROWSER.map((field) => <span className="field-chip" key={field}>{field}</span>)}
-          </div>
-          <p className="microcopy">Provider: {preview.provider} · model: {preview.model} · cache hits: {preview.cacheHits} · new evaluations: {preview.providerEvaluated}</p>
-          <div className="button-row">
-            <Button className="button primary" type="button" onClick={confirm} disabled={preview.candidates.length < 8}>Send one decision request</Button>
-            <Button className="button quiet" type="button" onClick={() => setPreview(undefined)}>Cancel</Button>
-          </div>
-        </section>
+            <CardDescription>
+              Nothing has left this browser yet. If you continue, the fields below go directly to {preview.provider}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 pt-4">
+            <div className="flex flex-wrap gap-2">
+              {FIELDS_LEAVING_BROWSER.map((field) => <Badge variant="secondary" key={field}>{field}</Badge>)}
+            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Provider: {preview.provider} · model: {preview.model} · cache hits: {preview.cacheHits} · new evaluations: {preview.providerEvaluated}
+            </p>
+          </CardContent>
+          <CardFooter className="flex-wrap gap-2">
+            <Button type="button" size="lg" onClick={confirm} disabled={preview.candidates.length < 8}>
+              <HugeiconsIcon icon={LockKeyholeIcon} data-icon="inline-start" aria-hidden="true" />
+              Send one decision request
+            </Button>
+            <Button variant="outline" type="button" onClick={() => setPreview(undefined)}>Cancel</Button>
+          </CardFooter>
+        </Card>
       )}
 
       {result && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'complete') && (
-        <section className="panel results-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">04 / YOUR SHORTLIST</p>
-              <h2>{result.noUsefulAction ? 'No safe action surfaced' : `${result.cards.length} useful lead${result.cards.length === 1 ? '' : 's'}`}</h2>
+        <Card>
+          <CardHeader className="border-b">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <Badge variant="outline">04 / Your shortlist</Badge>
+                <CardTitle>{result.noUsefulAction ? 'No safe action surfaced' : `${result.cards.length} useful lead${result.cards.length === 1 ? '' : 's'}`}</CardTitle>
+              </div>
+              <Badge variant="secondary">Max 3 shown</Badge>
             </div>
-            <span className="badge">max 3 shown</span>
-          </div>
-          {result.cards.length > 0 ? <div className="card-stack">
-            {result.cards.map(({ candidate, decision }) => (
-              <article className={`result-card ${decision.label}`} key={candidate.id}>
-                <div className="result-card-top">
-                  <span className={`decision-badge ${decision.label}`}>{decision.label.toUpperCase()}</span>
-                  {candidate.author && <span className="author">{candidate.author}</span>}
-                </div>
-                <p>{candidate.text}</p>
-                <p className="reason">{decision.reason}</p>
-                {candidate.canonicalUrl && <a href={candidate.canonicalUrl} target="_blank" rel="noreferrer">Open on X ↗</a>}
-              </article>
-            ))}
-          </div> : <p className="muted">No useful action found. Needle did not manufacture one.</p>}
-        </section>
+            <CardDescription>Decisions stay scoped to the visible posts. Needle never manufactures a lead.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 pt-4">
+            {result.cards.length > 0 ? result.cards.map(({ candidate, decision }) => (
+              <Card size="sm" className="bg-background/60" key={candidate.id}>
+                <CardHeader className="gap-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={decisionVariant(decision.label)}>{decision.label.toUpperCase()}</Badge>
+                    {candidate.author && <span className="min-w-0 truncate text-xs text-muted-foreground">{candidate.author}</span>}
+                  </div>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2 pb-3">
+                  <p className="text-sm leading-5">{candidate.text}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">{decision.reason}</p>
+                </CardContent>
+                {candidate.canonicalUrl && (
+                  <CardFooter className="justify-end border-t-0 bg-transparent pt-0">
+                    <a className={buttonVariants({ variant: 'link', size: 'sm' })} href={candidate.canonicalUrl} target="_blank" rel="noreferrer">
+                      Open on X
+                      <HugeiconsIcon icon={ExternalLinkIcon} data-icon="inline-end" aria-hidden="true" />
+                    </a>
+                  </CardFooter>
+                )}
+              </Card>
+            )) : (
+              <Empty className="border-border bg-background/40">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" /></EmptyMedia>
+                  <EmptyTitle>No useful action found</EmptyTitle>
+                  <EmptyDescription>Needle did not manufacture one. Try a sharper goal or a different mode.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {receipt && (uiState === 'results' || uiState === 'no_useful_action' || uiState === 'awaiting_outcome' || uiState === 'complete' || receipt.phase === 'complete') && (
-        <section className="panel receipt-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">05 / CLOSE THE LOOP</p>
-              <h2>{receipt.phase === 'complete' ? 'Session complete' : 'Record what happened'}</h2>
+        <Card>
+          <CardHeader className="border-b">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-1">
+                <Badge variant="outline">05 / Close the loop</Badge>
+                <CardTitle>{receipt.phase === 'complete' ? 'Session complete' : 'Record what happened'}</CardTitle>
+              </div>
+              <Badge variant={receipt.phase === 'complete' ? 'secondary' : 'outline'}>{receipt.totalLatencyMs} ms</Badge>
             </div>
-            <span className="badge">{receipt.totalLatencyMs} ms</span>
-          </div>
-          {receipt.phase === 'awaiting_outcome' && <>
-            <p className="muted">Choose the closest honest outcome. This is local session bookkeeping, not an automated action.</p>
-            <div className="outcome-grid">
-              {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => <Button className="button quiet" type="button" key={outcome} onClick={() => declareOutcome(outcome)}>{OUTCOME_LABELS[outcome]}</Button>)}
-            </div>
-          </>}
-          <pre className="receipt">{formatReceipt(receipt)}</pre>
-          <Button className="button quiet" type="button" onClick={copyReceipt}>{copyLabel}</Button>
-          {olderReceipts.length > 0 && <details className="history">
-            <summary>Earlier session receipts ({olderReceipts.length})</summary>
-            <div className="history-list">
-              {olderReceipts.slice().reverse().map((historyReceipt) => (
-                <pre className="receipt history-receipt" key={`${historyReceipt.completedAt ?? historyReceipt.totalLatencyMs}-${historyReceipt.goal}`}>{formatReceipt(historyReceipt)}</pre>
-              ))}
-            </div>
-          </details>}
-        </section>
+            <CardDescription>
+              {receipt.phase === 'complete' ? 'This receipt is complete and ready to keep.' : 'Choose the closest honest outcome. This is local session bookkeeping, not an automated action.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 pt-4">
+            {receipt.phase === 'awaiting_outcome' && (
+              <FieldGroup className="gap-3">
+                <Field>
+                  <FieldLabel>Outcome</FieldLabel>
+                  <ToggleGroup
+                    aria-label="Session outcome"
+                    variant="outline"
+                    spacing={1}
+                    value={[]}
+                    onValueChange={(values) => {
+                      const outcome = values[0] as Outcome | undefined;
+                      if (outcome) void declareOutcome(outcome);
+                    }}
+                    className="grid w-full grid-cols-2"
+                  >
+                    {(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => (
+                      <ToggleGroupItem value={outcome} key={outcome}>{OUTCOME_LABELS[outcome]}</ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </Field>
+              </FieldGroup>
+            )}
+            <pre className="max-h-72 overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap">{formatReceipt(receipt)}</pre>
+            {olderReceipts.length > 0 && (
+              <>
+                <Separator />
+                <details className="group">
+                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+                    Earlier session receipts ({olderReceipts.length})
+                  </summary>
+                  <div className="mt-3 flex flex-col gap-3">
+                    {olderReceipts.slice().reverse().map((historyReceipt) => (
+                      <pre className="overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap" key={`${historyReceipt.completedAt ?? historyReceipt.totalLatencyMs}-${historyReceipt.goal}`}>
+                        {formatReceipt(historyReceipt)}
+                      </pre>
+                    ))}
+                  </div>
+                </details>
+              </>
+            )}
+          </CardContent>
+          <CardFooter className="justify-end">
+            <Button variant="outline" type="button" onClick={copyReceipt}>{copyLabel}</Button>
+          </CardFooter>
+        </Card>
       )}
 
-      <footer>
+      <footer className="flex items-center justify-between gap-3 px-1 pb-1 text-[11px] text-muted-foreground">
         <span>Local-first · one consented provider request</span>
-        <span>{uiState === 'loading' ? 'Warming up…' : uiState.replaceAll('_', ' ')}</span>
+        <Badge variant="outline" className="capitalize">{stateLabel(uiState)}</Badge>
       </footer>
     </main>
   );
