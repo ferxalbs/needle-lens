@@ -3,6 +3,7 @@ import type {
   LensConfig,
   LensMode,
   LensStrictness,
+  LiveSessionState,
   Mode,
   Outcome,
   SessionReceipt,
@@ -57,6 +58,11 @@ export type ExtensionMessage =
   | { type: 'grant_consent' }
   | { type: 'revoke_consent' }
   | { type: 'check_page' }
+  | { type: 'start_live_session'; lensId: string }
+  | { type: 'analyze_new_posts'; candidateIds: string[] }
+  | { type: 'pause_live_session' }
+  | { type: 'resume_live_session' }
+  | { type: 'finish_live_session' }
   | { type: 'prepare_analysis'; lensId: string }
   | {
       type: 'confirm_analysis';
@@ -103,6 +109,18 @@ export type AnalysisResult = {
   noUsefulAction: boolean;
 };
 
+export type LiveSessionSnapshot = {
+  sessionId: string;
+  state: LiveSessionState;
+  tabId: number;
+  tabUrl: string;
+  lens: LensConfig;
+  reviewed: number;
+  surfaced: number;
+  pendingCount: number;
+  result?: AnalysisResult;
+};
+
 export type BackgroundState = {
   state: 'needs_lens' | 'needs_key' | 'ready' | 'awaiting_consent' | 'awaiting_outcome' | 'complete';
   activeLens?: LensConfig;
@@ -139,6 +157,7 @@ export type ExtensionResponse =
   | { ok: true; type: 'consent_revoked' }
   | { ok: true; type: 'preview'; value: AnalysisPreview }
   | { ok: true; type: 'analysis'; value: AnalysisResult }
+  | { ok: true; type: 'live_session'; value: LiveSessionSnapshot }
   | { ok: true; type: 'outcome'; receipt: SessionReceipt; receiptHistory?: SessionReceipt[] }
   | { ok: true; type: 'lens_saved'; lens: LensConfig; settings: AppSettings }
   | { ok: true; type: 'lens_duplicated'; lens: LensConfig; settings: AppSettings }
@@ -215,6 +234,9 @@ export function parseMessage(value: unknown): ExtensionMessage | undefined {
     case 'grant_consent':
     case 'revoke_consent':
     case 'check_page':
+    case 'pause_live_session':
+    case 'resume_live_session':
+    case 'finish_live_session':
     case 'grant_x_access':
     case 'revoke_x_access':
       return hasOnlyKeys(value, ['type']) ? { type: value.type } : undefined;
@@ -224,7 +246,13 @@ export function parseMessage(value: unknown): ExtensionMessage | undefined {
         ? { type: 'save_key', apiKey: value.apiKey, retention: value.retention }
         : undefined;
     case 'prepare_analysis':
-      return hasOnlyKeys(value, ['type', 'lensId']) && isStringId(value.lensId) ? { type: 'prepare_analysis', lensId: value.lensId } : undefined;
+    case 'start_live_session':
+      return hasOnlyKeys(value, ['type', 'lensId']) && isStringId(value.lensId) ? { type: value.type, lensId: value.lensId } : undefined;
+    case 'analyze_new_posts':
+      return hasOnlyKeys(value, ['type', 'candidateIds']) && Array.isArray(value.candidateIds) && value.candidateIds.length >= 1 && value.candidateIds.length <= MAX_ITEMS &&
+        value.candidateIds.every(isStringId) && new Set(value.candidateIds).size === value.candidateIds.length
+        ? { type: 'analyze_new_posts', candidateIds: value.candidateIds }
+        : undefined;
     case 'confirm_analysis':
       return hasOnlyKeys(value, ['type', 'sessionId', 'candidates', 'tabId', 'tabUrl']) && isStringId(value.sessionId) && isVisibleCandidateList(value.candidates) &&
         typeof value.tabId === 'number' && Number.isInteger(value.tabId) && value.tabId >= 0 &&

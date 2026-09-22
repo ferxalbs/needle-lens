@@ -52,21 +52,46 @@ export function appendReceiptHistory(
   return [...history, receipt].slice(-MAX_RECEIPT_HISTORY);
 }
 
+export function mergeReceipts(previous: SessionReceipt, next: SessionReceipt): SessionReceipt {
+  const add = (left: number | undefined, right: number | undefined): number | undefined =>
+    left === undefined && right === undefined ? undefined : (left ?? 0) + (right ?? 0);
+  const inputTokens = add(previous.inputTokens, next.inputTokens);
+  const outputTokens = add(previous.outputTokens, next.outputTokens);
+  return {
+    ...next,
+    stats: {
+      reviewed: previous.stats.reviewed + next.stats.reviewed,
+      cacheHits: previous.stats.cacheHits + next.stats.cacheHits,
+      providerEvaluated: previous.stats.providerEvaluated + next.stats.providerEvaluated,
+      act: previous.stats.act + next.stats.act,
+      inspect: previous.stats.inspect + next.stats.inspect,
+      passed: previous.stats.passed + next.stats.passed,
+      uncertain: previous.stats.uncertain + next.stats.uncertain,
+      shown: Math.min(3, previous.stats.shown + next.stats.shown),
+      worthActingOn: previous.stats.worthActingOn + next.stats.worthActingOn,
+    },
+    providerLatencyMs: previous.providerLatencyMs + next.providerLatencyMs,
+    totalLatencyMs: previous.totalLatencyMs + next.totalLatencyMs,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+  };
+}
+
 export function formatReceipt(receipt: SessionReceipt): string {
   const lines = [
     'NEEDLE LENS — SESSION RECEIPT',
     'Session complete',
-    `Lens: ${receipt.lensName}`,
-    `Reviewed: ${receipt.stats.reviewed}`,
-    `Act: ${receipt.stats.act}`,
-    `Inspect: ${receipt.stats.inspect}`,
-    `Passed: ${receipt.stats.passed}`,
-    `Uncertain: ${receipt.stats.uncertain}`,
+    `Lens       ${receipt.lensName}`,
+    `Reviewed   ${receipt.stats.reviewed}`,
+    `Act        ${receipt.stats.act}`,
+    `Inspect    ${receipt.stats.inspect}`,
+    `Uncertain  ${receipt.stats.uncertain}`,
+    `Passed     ${receipt.stats.passed}`,
     `Shown: ${receipt.stats.shown}`,
     `Jev model: ${receipt.model}`,
-    `Jev time: ${receipt.providerLatencyMs} ms`,
-    `Cost: ${receipt.costStatus === 'unavailable' ? 'unavailable' : receipt.costUsd === undefined ? receipt.costStatus : `$${receipt.costUsd.toFixed(6)}`}`,
-    `Outcome: ${receipt.outcome ?? 'awaiting user'}`,
+    `Jev time   ${receipt.providerLatencyMs} ms`,
+    `Cost       ${receipt.costStatus === 'unavailable' ? 'unavailable' : receipt.costUsd === undefined ? receipt.costStatus : `$${receipt.costUsd.toFixed(6)}`}`,
+    `Outcome    ${receipt.outcome ?? 'awaiting user'}`,
     `Strictness: ${receipt.strictness}`,
     `Total session latency: ${receipt.totalLatencyMs} ms`,
     `Input usage: ${receipt.inputTokens ?? 'not reported'}`,

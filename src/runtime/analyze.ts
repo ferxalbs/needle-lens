@@ -108,8 +108,8 @@ export async function analyzeCandidates(input: {
   now?: () => number;
   performanceNow?: () => number;
 }): Promise<AnalysisRun> {
-  if (input.candidates.length < 1 || input.candidates.length > 30) {
-    throw new JevAdapterError('contract', 'Analysis requires 1–30 eligible candidates.');
+  if (input.candidates.length < 1 || input.candidates.length > 8) {
+    throw new JevAdapterError('contract', 'Analysis requires 1–8 eligible candidates per provider request.');
   }
   const lens = requireLens(input);
   const clock = input.now ?? Date.now;

@@ -1,6 +1,6 @@
 import { DecisionCache, type CacheRetention } from '../src/cache/decision-cache';
-import { appendReceiptHistory, completeReceipt } from '../src/domain/receipt';
-import { MAX_ITEMS, MODEL, PROVIDER, type LensConfig, type Outcome, type SessionReceipt, type VisibleCandidate } from '../src/domain/types';
+import { appendReceiptHistory, completeReceipt, mergeReceipts } from '../src/domain/receipt';
+import { MAX_ITEMS, MODEL, PROVIDER, type Decision, type LensConfig, type LiveSessionState, type Outcome, type SessionReceipt, type VisibleCandidate } from '../src/domain/types';
 import { defaultLensFor, SettingsStore } from '../src/settings/storage';
 import { CredentialStore, SESSION_API_KEY, SESSION_CREDENTIAL_RETENTION, SESSION_KEY_FINGERPRINT, type StorageAreaLike } from '../src/security/credentials';
 import { JevAdapterError } from '../src/provider/jev-adapter';
@@ -12,6 +12,7 @@ import {
   type AnalysisResult,
   type ExtensionErrorCode,
   type ExtensionResponse,
+  type LiveSessionSnapshot,
   type SettingsSnapshot,
 } from '../src/messaging/protocol';
 import { ensureXAccess, X_HOST_ORIGINS } from '../src/security/x-access';
@@ -112,6 +113,16 @@ export default defineBackground(() => {
   let cacheRetention: CacheRetention | undefined;
   let activePreview: { sessionId: string; lens: LensConfig; candidates: VisibleCandidate[]; tabId: number; tabUrl: string } | undefined;
   let analysisInFlight = false;
+  let liveSession: {
+    id: string;
+    state: LiveSessionState;
+    lens: LensConfig;
+    tabId: number;
+    tabUrl: string;
+    reviewedIds: Set<string>;
+    decisions: Decision[];
+    result?: AnalysisResult;
+  } | undefined;
 
   void session.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
   void browser.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => undefined);
@@ -184,6 +195,122 @@ export default defineBackground(() => {
     } catch {
       return { ok: false, code: 'injection_failed' };
     }
+  }
+
+  function liveSnapshot(pendingCount = 0): LiveSessionSnapshot {
+    if (!liveSession) throw new Error('No live session exists.');
+    return {
+      sessionId: liveSession.id,
+      state: liveSession.state,
+      tabId: liveSession.tabId,
+      tabUrl: liveSession.tabUrl,
+      lens: liveSession.lens,
+      reviewed: liveSession.reviewedIds.size,
+      surfaced: liveSession.decisions.filter((decision) => decision.label !== 'pass').length,
+      pendingCount,
+      ...(liveSession.result ? { result: liveSession.result } : {}),
+    };
+  }
+
+  async function commandTab(message: object): Promise<unknown> {
+    if (!liveSession) return undefined;
+    return browser.tabs.sendMessage(liveSession.tabId, message);
+  }
+
+  async function analyzeLiveBatch(candidates: readonly VisibleCandidate[]): Promise<ExtensionResponse> {
+    if (!liveSession) return { ok: false, error: 'Start a Lens session first.', code: 'stale_session' };
+    if (analysisInFlight) return { ok: false, error: 'An analysis is already running.', code: 'analysis_in_progress' };
+    const remainingItems = liveSession.lens.maxItems - liveSession.reviewedIds.size;
+    const selected = candidates.filter((candidate) => !liveSession?.reviewedIds.has(candidate.id)).slice(0, Math.min(8, remainingItems));
+    if (selected.length === 0) return { ok: false, error: 'No pending rendered posts remain eligible.', code: 'empty_candidates' };
+    analysisInFlight = true;
+    liveSession.state = 'analyzing';
+    try {
+      const settings = await settingsStore.get();
+      if (!settings.consent) return { ok: false, error: 'Review and accept the data-use notice before sending post text to TypeSafe.', code: 'consent_required' };
+      const active = await activeXTab();
+      if (!active.ok) return activeTabFailure(active.code);
+      if (active.value.id !== liveSession.tabId || active.value.url !== liveSession.tabUrl) {
+        await commandTab({ type: 'needle_finish_session' }).catch(() => undefined);
+        liveSession.state = 'complete';
+        return activeTabFailure('active_tab_changed');
+      }
+      const loaded = await credentials.load();
+      if (!loaded) return { ok: false, error: 'Save a TypeSafe AI API key in Settings before analyzing.', code: 'missing_key' };
+      const analysis = await analyzeCandidates({ apiKey: loaded.apiKey, candidates: selected, lens: liveSession.lens, cache: await currentCache(settings) });
+      selected.forEach((candidate) => liveSession?.reviewedIds.add(candidate.id));
+      const remainingActions = Math.max(0, liveSession.lens.maxActions - liveSession.decisions.filter((decision) => decision.label !== 'pass').length);
+      const surfaced = analysis.decisions.filter((decision) => decision.label !== 'pass').slice(0, remainingActions);
+      liveSession.decisions.push(...surfaced, ...analysis.decisions.filter((decision) => decision.label === 'pass'));
+      const receipt = liveSession.result ? mergeReceipts(liveSession.result.receipt, analysis.receipt) : analysis.receipt;
+      const cards = [...(liveSession.result?.cards ?? []), ...analysis.cards].slice(0, liveSession.lens.maxActions);
+      liveSession.result = { cards, receipt, noUsefulAction: cards.length === 0 };
+      await session.set({ [RECEIPT_STORAGE_KEY]: receipt });
+      const byId = new Map(selected.map((candidate) => [candidate.id, candidate]));
+      await commandTab({
+        type: 'needle_render_overlays',
+        decisions: surfaced.map((decision) => ({ ...decision, canonicalUrl: byId.get(decision.candidateId)?.canonicalUrl })),
+      }).catch(() => undefined);
+      const limitReached = liveSession.reviewedIds.size >= liveSession.lens.maxItems ||
+        liveSession.decisions.filter((decision) => decision.label !== 'pass').length >= liveSession.lens.maxActions;
+      liveSession.state = limitReached ? 'complete' : 'observing';
+      if (limitReached) await commandTab({ type: 'needle_pause_observer' }).catch(() => undefined);
+      return { ok: true, type: 'live_session', value: liveSnapshot() };
+    } catch (error) {
+      liveSession.state = 'retryable_error';
+      if (error instanceof JevAdapterError && error.kind === 'authentication') await credentials.forget();
+      throw error;
+    } finally {
+      analysisInFlight = false;
+    }
+  }
+
+  async function startLiveSession(lensId: string): Promise<ExtensionResponse> {
+    const settings = await settingsStore.get();
+    const lens = settings.lenses.find((entry) => entry.id === lensId);
+    if (!lens) return { ok: false, error: 'Choose a saved Lens first.', code: 'lens_required' };
+    const active = await activeXTab();
+    if (!active.ok) return activeTabFailure(active.code);
+    const extracted = await extractFromTab(active.value.id);
+    if (!extracted.ok) return activeTabFailure(extracted.code);
+    liveSession = { id: crypto.randomUUID(), state: 'analyzing', lens, tabId: active.value.id, tabUrl: active.value.url, reviewedIds: new Set(), decisions: [] };
+    const candidates = extracted.candidates.slice(0, lens.maxItems);
+    if (candidates.length === 0) return { ok: false, error: 'No eligible visible posts were found.', code: 'empty_candidates' };
+    let response: ExtensionResponse | undefined;
+    for (let offset = 0; offset < candidates.length && liveSession.state !== 'complete'; offset += 8) {
+      response = await analyzeLiveBatch(candidates.slice(offset, offset + 8));
+      if (!response.ok) return response;
+    }
+    if (response?.ok && response.type === 'live_session' && liveSession.state !== 'complete') {
+      await commandTab({ type: 'needle_start_observer', analyzedIds: [...liveSession.reviewedIds] });
+      liveSession.state = 'observing';
+      return { ok: true, type: 'live_session', value: liveSnapshot() };
+    }
+    return response ?? { ok: false, error: 'No eligible visible posts were found.', code: 'empty_candidates' };
+  }
+
+  async function analyzeNewPosts(candidateIds: readonly string[]): Promise<ExtensionResponse> {
+    if (!liveSession || liveSession.state === 'complete') return { ok: false, error: 'Start a new Lens session first.', code: 'stale_session' };
+    const active = await activeXTab();
+    if (!active.ok || active.value.id !== liveSession.tabId || active.value.url !== liveSession.tabUrl) return activeTabFailure('active_tab_changed');
+    const response = await commandTab({ type: 'needle_extract_candidates', candidateIds: candidateIds.slice(0, 8) });
+    if (!isCandidateList(response)) return { ok: false, error: 'The pending rendered posts are no longer available.', code: 'empty_candidates' };
+    return analyzeLiveBatch(response);
+  }
+
+  async function setLiveSessionState(action: 'pause' | 'resume' | 'finish'): Promise<ExtensionResponse> {
+    if (!liveSession) return { ok: false, error: 'No live session is active.', code: 'stale_session' };
+    if (action === 'pause') {
+      liveSession.state = 'paused';
+      await commandTab({ type: 'needle_pause_observer' }).catch(() => undefined);
+    } else if (action === 'resume') {
+      liveSession.state = 'observing';
+      await commandTab({ type: 'needle_start_observer', analyzedIds: [...liveSession.reviewedIds] }).catch(() => undefined);
+    } else {
+      liveSession.state = 'complete';
+      await commandTab({ type: 'needle_finish_session' }).catch(() => undefined);
+    }
+    return { ok: true, type: 'live_session', value: liveSnapshot() };
   }
 
   async function prepareAnalysis(lensId: string): Promise<ExtensionResponse> {
@@ -339,6 +466,11 @@ export default defineBackground(() => {
         case 'grant_consent': await settingsStore.grantConsent(); return { ok: true, type: 'consent_granted' };
         case 'revoke_consent': await settingsStore.revokeConsent(); return { ok: true, type: 'consent_revoked' };
         case 'check_page': return checkPage();
+        case 'start_live_session': return startLiveSession(message.lensId);
+        case 'analyze_new_posts': return analyzeNewPosts(message.candidateIds);
+        case 'pause_live_session': return setLiveSessionState('pause');
+        case 'resume_live_session': return setLiveSessionState('resume');
+        case 'finish_live_session': return setLiveSessionState('finish');
         case 'prepare_analysis': return prepareAnalysis(message.lensId);
         case 'confirm_analysis': return confirmAnalysis(message.sessionId, message.candidates, message.tabId, message.tabUrl);
         case 'declare_outcome': return handleOutcome(message.outcome);
@@ -370,5 +502,28 @@ export default defineBackground(() => {
       sendResponse({ ok: false, error: 'Needle Lens could not complete this request. Try again.', code: 'internal' } satisfies ExtensionResponse);
     });
     return true;
+  });
+
+  browser.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'needle-live-panel') return;
+    port.onDisconnect.addListener(() => {
+      if (!liveSession || liveSession.state === 'complete') return;
+      const tabId = liveSession.tabId;
+      liveSession.state = 'complete';
+      void browser.tabs.sendMessage(tabId, { type: 'needle_finish_session' }).catch(() => undefined);
+    });
+  });
+
+  browser.tabs.onActivated.addListener(() => {
+    if (!liveSession || liveSession.state === 'complete') return;
+    const tabId = liveSession.tabId;
+    liveSession.state = 'complete';
+    void browser.tabs.sendMessage(tabId, { type: 'needle_finish_session' }).catch(() => undefined);
+  });
+
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (!liveSession || liveSession.state === 'complete' || tabId !== liveSession.tabId || !changeInfo.url) return;
+    liveSession.state = 'complete';
+    void browser.tabs.sendMessage(tabId, { type: 'needle_finish_session' }).catch(() => undefined);
   });
 });

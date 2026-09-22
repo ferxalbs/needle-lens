@@ -8,7 +8,7 @@ import {
   Settings01Icon,
   WandSparklesIcon,
 } from '@hugeicons/core-free-icons';
-import type { ExtensionMessage, ExtensionResponse, AnalysisPreview, AnalysisResult, BackgroundState } from '../../src/messaging/protocol';
+import type { ExtensionMessage, ExtensionResponse, AnalysisPreview, AnalysisResult, BackgroundState, LiveSessionSnapshot } from '../../src/messaging/protocol';
 import { FIELDS_LEAVING_BROWSER } from '../../src/messaging/protocol';
 import { formatReceipt } from '../../src/domain/receipt';
 import { OUTCOME_LABELS, type DecisionLabel, type Outcome } from '../../src/domain/types';
@@ -85,6 +85,8 @@ export default function App() {
   const [state, setState] = useState<BackgroundState>();
   const [preview, setPreview] = useState<AnalysisPreview>();
   const [result, setResult] = useState<AnalysisResult>();
+  const [liveSession, setLiveSession] = useState<LiveSessionSnapshot>();
+  const [pendingIds, setPendingIds] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copyLabel, setCopyLabel] = useState('Copy receipt');
@@ -120,17 +122,41 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
+    const livePort = browser.runtime.connect({ name: 'needle-live-panel' });
     const handleActivated = (): void => {
       if (extractionInFlight.current || analysisInFlight.current) return;
       setPreview(undefined);
       setResult(undefined);
+      setPendingIds([]);
+      setLiveSession((current) => current ? { ...current, state: 'complete', pendingCount: 0 } : current);
       setError('');
       setNotice('The active tab changed. Preview the new visible posts when ready.');
       setUiState('ready');
     };
     browser.tabs.onActivated.addListener(handleActivated);
-    return () => browser.tabs.onActivated.removeListener(handleActivated);
-  }, [refresh]);
+    const handleContentMessage = (value: unknown): void => {
+      if (typeof value !== 'object' || value === null) return;
+      const message = value as Record<string, unknown>;
+      if (message.type === 'needle_candidates_changed' && Array.isArray(message.candidateIds)) {
+        const ids = message.candidateIds.filter((id): id is string => typeof id === 'string').slice(0, 30);
+        setPendingIds(ids);
+        setLiveSession((current) => current && current.state !== 'paused' && current.state !== 'complete'
+          ? { ...current, state: ids.length > 0 ? 'new_candidates' : 'observing', pendingCount: ids.length }
+          : current);
+      }
+      if (message.type === 'needle_session_invalidated') {
+        setPendingIds([]);
+        setLiveSession((current) => current ? { ...current, state: 'complete', pendingCount: 0 } : current);
+        setNotice('The X route changed. The live session and its overlays were stopped.');
+      }
+    };
+    browser.runtime.onMessage.addListener(handleContentMessage);
+    return () => {
+      browser.tabs.onActivated.removeListener(handleActivated);
+      browser.runtime.onMessage.removeListener(handleContentMessage);
+      livePort.disconnect();
+    };
+  }, [refresh, send]);
 
   const openSettings = (): void => {
     void browser.runtime.openOptionsPage();
@@ -228,6 +254,60 @@ export default function App() {
     }
   };
 
+  const applyLiveResponse = (response: ExtensionResponse): void => {
+    if (isSuccessful(response, 'live_session')) {
+      setLiveSession(response.value);
+      if (response.value.result) {
+        const nextResult = response.value.result;
+        setResult(nextResult);
+        setState((previous) => previous ? { ...previous, receipt: nextResult.receipt, state: 'awaiting_outcome' } : previous);
+      }
+      setUiState(response.value.state === 'analyzing' ? 'analyzing' : response.value.result?.noUsefulAction ? 'no_useful_action' : 'results');
+    } else {
+      setError(messageForCode(response.ok ? undefined : response.code));
+      setUiState('retryable_error');
+    }
+  };
+
+  const startLens = async (): Promise<void> => {
+    if (!state?.activeLens || analysisInFlight.current) return;
+    analysisInFlight.current = true;
+    clearMessages();
+    setPendingIds([]);
+    setResult(undefined);
+    setUiState('analyzing');
+    try {
+      if (!state.consent) {
+        const consent = await send({ type: 'grant_consent' });
+        if (!isSuccessful(consent, 'consent_granted')) {
+          setError(providerError(consent));
+          setUiState('awaiting_consent');
+          return;
+        }
+      }
+      applyLiveResponse(await send({ type: 'start_live_session', lensId: state.activeLens.id }));
+    } finally {
+      analysisInFlight.current = false;
+    }
+  };
+
+  const analyzeNewPosts = async (): Promise<void> => {
+    if (pendingIds.length === 0 || analysisInFlight.current) return;
+    analysisInFlight.current = true;
+    setUiState('analyzing');
+    try {
+      applyLiveResponse(await send({ type: 'analyze_new_posts', candidateIds: pendingIds.slice(0, 8) }));
+    } finally {
+      analysisInFlight.current = false;
+    }
+  };
+
+  const controlSession = async (type: 'pause_live_session' | 'resume_live_session' | 'finish_live_session'): Promise<void> => {
+    const response = await send({ type });
+    applyLiveResponse(response);
+    if (type === 'finish_live_session') setPendingIds([]);
+  };
+
   const declareOutcome = async (outcome: Outcome): Promise<void> => {
     const response = await send({ type: 'declare_outcome', outcome });
     if (isSuccessful(response, 'outcome')) {
@@ -294,10 +374,12 @@ export default function App() {
             {state?.activeLens ? <div className="flex flex-col gap-2 text-xs leading-relaxed text-muted-foreground"><p><span className="font-medium text-foreground">Goal:</span> {state.activeLens.goal}</p><p><span className="font-medium text-foreground">Target:</span> {state.activeLens.target.join(' · ')}</p><p><span className="font-medium text-foreground">Evidence:</span> {state.activeLens.evidence.join(' · ')}</p></div> : <Empty><EmptyHeader><EmptyMedia variant="icon"><HugeiconsIcon icon={Settings01Icon} aria-hidden="true" /></EmptyMedia><EmptyTitle>Set up a Lens</EmptyTitle><EmptyDescription>Use Settings to define a goal, evidence, exclusions, decision policy, and desired actions.</EmptyDescription></EmptyHeader></Empty>}
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-2">
-            <Button type="button" onClick={() => void prepare()} disabled={!canAnalyze || loading}>{loading && <Spinner data-icon="inline-start" />}Preview visible posts</Button>
+            {!liveSession || liveSession.state === 'complete' ? <Button type="button" onClick={() => void startLens()} disabled={!canAnalyze || loading}>{loading && <Spinner data-icon="inline-start" />}Start Lens</Button> : <div className="flex flex-wrap gap-2"><Button variant="outline" type="button" onClick={() => void controlSession(liveSession.state === 'paused' ? 'resume_live_session' : 'pause_live_session')} disabled={loading}>{liveSession.state === 'paused' ? 'Resume' : 'Pause'}</Button><Button variant="destructive" type="button" onClick={() => void controlSession('finish_live_session')} disabled={loading}>Finish session</Button></div>}
             {!state?.credential.configured && <Button variant="outline" type="button" onClick={openSettings}>Add a TypeSafe key in Settings</Button>}
           </CardFooter>
         </Card>
+
+        {liveSession && liveSession.state !== 'complete' && <Card><CardHeader><CardTitle>Live session</CardTitle><CardDescription>{liveSession.reviewed} reviewed · {liveSession.surfaced} surfaced · up to {liveSession.lens.maxItems} total</CardDescription><CardAction><Badge variant="outline" className="capitalize">{liveSession.state.replaceAll('_', ' ')}</Badge></CardAction></CardHeader><CardContent><p className="text-sm font-medium">{pendingIds.length} new post{pendingIds.length === 1 ? '' : 's'} available</p><p className="mt-1 text-xs text-muted-foreground">Only canonical post IDs are held until you explicitly analyze this batch.</p></CardContent><CardFooter><Button type="button" onClick={() => void analyzeNewPosts()} disabled={pendingIds.length === 0 || loading}>Analyze new posts</Button></CardFooter></Card>}
 
         {!state?.activeLens && <Button type="button" onClick={openSettings}>Open Settings to create a Lens</Button>}
         {uiState === 'needs_x_access' && <Card><CardHeader><CardTitle>Grant exact X access</CardTitle><CardDescription>Only these origins are requested: {X_HOST_ORIGINS.join(' and ')}. Needle cannot post or control the account.</CardDescription></CardHeader><CardFooter><Button type="button" onClick={() => void grantXAccess()} disabled={loading}>Grant access to X</Button></CardFooter></Card>}
@@ -314,7 +396,7 @@ export default function App() {
 
         {result && <Card><CardHeader><CardTitle>{result.noUsefulAction ? 'No useful action found' : `${result.cards.length} surfaced result${result.cards.length === 1 ? '' : 's'}`}</CardTitle><CardDescription>Needle composes these labels deterministically from the selected Lens, Jev probabilities, and confidence. Zero actions is valid.</CardDescription><CardAction><Badge variant="secondary">Max {result.receipt.stats.shown}</Badge></CardAction></CardHeader><CardContent className="flex flex-col gap-3">{result.cards.length > 0 ? result.cards.map(({ candidate, decision }) => <Card size="sm" key={candidate.id}><CardHeader className="gap-1.5"><div className="flex items-center gap-2"><Badge variant={decisionVariant(decision.label)}>{decision.label.toUpperCase()}</Badge>{candidate.author && <span className="min-w-0 truncate text-xs text-muted-foreground">{candidate.author}</span>}</div><CardDescription>{decision.reason}</CardDescription></CardHeader><CardContent className="flex flex-col gap-2"><p className="text-sm leading-relaxed">{candidate.text}</p><div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"><Badge variant="outline">probability {Math.round(decision.probability * 100)}%</Badge><Badge variant="outline">confidence {Math.round(decision.confidence * 100)}%</Badge><Badge variant="outline">{decision.boundary}</Badge></div><details><summary className="cursor-pointer text-xs font-medium text-muted-foreground">Typed evidence</summary><div className="mt-2 grid grid-cols-2 gap-1 text-[11px] text-muted-foreground"><span>Relationship: {decision.signals.relationship.choice}</span><span>Goal: {Math.round(decision.signals.matchesGoal.value * 100)}%</span><span>Evidence: {Math.round(decision.signals.evidenceStrength.value * 100)}%</span><span>Actionability: {Math.round(decision.signals.actionability.value * 100)}%</span><span>Target: {Math.round(decision.signals.targetMatch.value * 100)}%</span><span>Need: {Math.round(decision.signals.hasConcreteNeed.value * 100)}%</span></div></details></CardContent>{candidate.canonicalUrl && <CardFooter className="justify-end pt-0"><a className={buttonVariants({ variant: 'link', size: 'sm' })} href={candidate.canonicalUrl} target="_blank" rel="noreferrer">Open on X <HugeiconsIcon icon={ExternalLinkIcon} data-icon="inline-end" aria-hidden="true" /></a></CardFooter>}</Card>) : <Empty><EmptyHeader><EmptyMedia variant="icon"><HugeiconsIcon icon={WandSparklesIcon} aria-hidden="true" /></EmptyMedia><EmptyTitle>No useful action found</EmptyTitle><EmptyDescription>Needle did not manufacture one. Refine the Lens or review a different visible X set.</EmptyDescription></EmptyHeader></Empty>}</CardContent></Card>}
 
-        {receipt && <Card><CardHeader><CardTitle>{receipt.phase === 'complete' ? 'Session complete' : 'Record what happened'}</CardTitle><CardDescription>Outcome is local bookkeeping and is separate from the decision evidence.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3">{receipt.phase === 'awaiting_outcome' && <ToggleGroup aria-label="Session outcome" variant="outline" spacing={1} value={[]} onValueChange={(values) => { const outcome = values[0] as Outcome | undefined; if (outcome) void declareOutcome(outcome); }} className="grid w-full grid-cols-2">{(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => <ToggleGroupItem value={outcome} key={outcome}>{OUTCOME_LABELS[outcome]}</ToggleGroupItem>)}</ToggleGroup>}<Separator /><ScrollArea className="max-h-64 rounded-xl border bg-muted/20"><pre className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">{formatReceipt(receipt)}</pre></ScrollArea></CardContent><CardFooter className="justify-end"><Button variant="outline" type="button" onClick={() => void copyReceipt()}>{copyLabel}</Button></CardFooter></Card>}
+        {receipt && <Card><CardHeader><CardTitle>{receipt.phase === 'complete' || liveSession?.state === 'complete' ? 'Session complete' : 'Record what happened'}</CardTitle><CardDescription>Outcome is local bookkeeping and is separate from the decision evidence.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3">{receipt.phase === 'awaiting_outcome' && <ToggleGroup aria-label="Session outcome" variant="outline" spacing={1} value={[]} onValueChange={(values) => { const outcome = values[0] as Outcome | undefined; if (outcome) void declareOutcome(outcome); }} className="grid w-full grid-cols-2">{(Object.keys(OUTCOME_LABELS) as Outcome[]).map((outcome) => <ToggleGroupItem value={outcome} key={outcome}>{OUTCOME_LABELS[outcome]}</ToggleGroupItem>)}</ToggleGroup>}<Separator /><ScrollArea className="max-h-64 rounded-xl border bg-muted/20"><pre className="whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">{formatReceipt(receipt)}</pre></ScrollArea></CardContent><CardFooter className="justify-end"><Button variant="outline" type="button" onClick={() => void copyReceipt()}>{copyLabel}</Button></CardFooter></Card>}
 
         <footer className="flex items-center justify-between gap-3 px-1 py-1 text-xs text-muted-foreground"><span>Local-first · no posting or account action</span><Badge variant="outline" className="capitalize">{stateLabel(uiState)}</Badge></footer>
       </main>

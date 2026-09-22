@@ -69,6 +69,14 @@ export type AnalysisStats = {
 };
 
 export type CostStatus = 'reported' | 'estimated' | 'unavailable';
+export type LiveSessionState =
+  | 'idle'
+  | 'analyzing'
+  | 'observing'
+  | 'new_candidates'
+  | 'paused'
+  | 'complete'
+  | 'retryable_error';
 export type SessionReceipt = {
   version: 1;
   phase: ReceiptPhase;
